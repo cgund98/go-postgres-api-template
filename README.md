@@ -11,7 +11,7 @@
 
 *Built with ❤️ using Domain-Driven Design and Event-Driven Architecture*
 
-[Features](#-features) • [Quick Start](#-getting-started) • [Architecture](#-architecture) • [Example](#-example-business-case)
+[Features](#-features) • [Quick Start](#-getting-started) • [Project Structure](#-project-structure) • [Example](#-example-business-case)
 
 </div>
 
@@ -167,7 +167,6 @@ go-postgres-api-template/
 
 ### Prerequisites
 
-- Go 1.24.3+
 - Docker & Docker Compose
 - Make (optional, but recommended)
 
