@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  workspace:
+    build:
+      context: .
+      dockerfile: resources/docker/workspace.Dockerfile
+    platform: linux/amd64
+    container_name: go-postgres-api-template-workspace
+    volumes:
+      - .:/workspace
+      - go-mod-cache:/go/pkg/mod
+    working_dir: /workspace
+    ports: 
+      - "8080:8080"
+    stdin_open: true
+    tty: true
+    environment:
+      - CGO_ENABLED=0
+      - GOOS=linux
+      - GOARCH=amd64
+    depends_on:
+      - postgres
+      - localstack
+
+  postgres:
+    image: postgres:16
+    container_name: go-postgres-api-template-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: go-postgres-api-template-localstack
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"  # External services port range
+    environment:
+      - SERVICES=sns,sqs
+      - DEBUG=1
+      - PERSISTENCE=0
+      - LAMBDA_EXECUTOR=local
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+  go-mod-cache:
+
