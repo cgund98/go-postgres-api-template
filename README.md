@@ -81,7 +81,7 @@ This template follows a **3-tier architecture** with clear separation of concern
 - **Events**: Domain events for event-driven communication
 - **Handlers**: Event handlers for processing domain events
 
-### Infrastructure Layer (`internal/infrastructure/`)
+### Infrastructure Layer (`internal/adapters/`)
 - **Database**: PostgreSQL connection pooling and transaction management
 - **Messaging**: Event publishing (SNS) and consumption (SQS) with generic type support
 - **AWS**: AWS SDK integration with LocalStack support
@@ -121,7 +121,7 @@ go-postgres-api-template/
 │   │       ├── service.go          # Domain service
 │   │       └── validators.go       # Domain validation
 │   │
-│   ├── infrastructure/
+│   ├── adapters/
 │   │   ├── db/
 │   │   │   ├── context.go          # Generic database context interface
 │   │   │   └── postgres/           # PostgreSQL implementation

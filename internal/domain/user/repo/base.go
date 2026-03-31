@@ -10,7 +10,7 @@ import (
 // The repository extracts the database context from the context.Context internally
 type Repository interface {
 	// Create creates a new user
-	Create(ctx context.Context, u *model.UserCreate) (*model.User, error)
+	Create(ctx context.Context, u *model.CreateUserCommand) (*model.User, error)
 
 	// GetByID retrieves a user by ID
 	GetByID(ctx context.Context, id string) (*model.User, error)
@@ -19,7 +19,7 @@ type Repository interface {
 	GetByEmail(ctx context.Context, email string) (*model.User, error)
 
 	// Update updates an existing user
-	Update(ctx context.Context, id string, u *model.UserUpdate) (*model.User, error)
+	Update(ctx context.Context, id string, u *model.UpdateUserCommand) (*model.User, error)
 
 	// Delete deletes a user by ID
 	Delete(ctx context.Context, id string) error

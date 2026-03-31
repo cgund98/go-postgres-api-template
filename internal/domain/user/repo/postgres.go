@@ -2,16 +2,16 @@ package repo
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/db"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/db/postgres"
 	"github.com/cgund98/go-postgres-api-template/internal/domain"
 	"github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/db"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/db/postgres"
 )
 
 // PostgresRepository implements the Repository interface for PostgreSQL.
@@ -26,9 +26,9 @@ func NewPostgresRepository() *PostgresRepository {
 }
 
 // Create creates a new user
-func (r *PostgresRepository) Create(ctx context.Context, u *model.UserCreate) (*model.User, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+func (r *PostgresRepository) Create(ctx context.Context, u *model.CreateUserCommand) (*model.User, error) {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return nil, db.ErrNoDBContext
 	}
 
@@ -48,97 +48,86 @@ func (r *PostgresRepository) Create(ctx context.Context, u *model.UserCreate) (*
 		RETURNING id, email, first_name, last_name, created_at, updated_at
 	`
 
-	err := tx.QueryRowContext(ctx, query,
+	rows, err := dbContext.Tx.Query(ctx, query,
 		newUser.ID,
 		newUser.Email,
 		newUser.FirstName,
 		newUser.LastName,
 		newUser.CreatedAt,
 		newUser.UpdatedAt,
-	).Scan(
-		&newUser.ID,
-		&newUser.Email,
-		&newUser.FirstName,
-		&newUser.LastName,
-		&newUser.CreatedAt,
-		&newUser.UpdatedAt,
 	)
-
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query: %w", err)
+	}
+	defer rows.Close()
+
+	createdUser, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[model.User])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect one row: %w", err)
 	}
 
-	return newUser, nil
+	return createdUser, nil
 }
 
 // GetByID retrieves a user by ID
 func (r *PostgresRepository) GetByID(ctx context.Context, id string) (*model.User, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return nil, db.ErrNoDBContext
 	}
-	u := &model.User{}
 	query := `
 		SELECT id, email, first_name, last_name, created_at, updated_at
 		FROM users
 		WHERE id = $1
 	`
 
-	err := tx.QueryRowContext(ctx, query, id).Scan(
-		&u.ID,
-		&u.Email,
-		&u.FirstName,
-		&u.LastName,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, domain.ErrNotFound
-	}
+	rows, err := dbContext.Tx.Query(ctx, query, id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query: %w", err)
+	}
+	defer rows.Close()
+
+	user, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[model.User])
+	if err == pgx.ErrNoRows {
+		return nil, domain.ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to collect one row: %w", err)
 	}
 
-	return u, nil
+	return user, nil
 }
 
 // GetByEmail retrieves a user by email
 func (r *PostgresRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return nil, db.ErrNoDBContext
 	}
-	u := &model.User{}
 	query := `
 		SELECT id, email, first_name, last_name, created_at, updated_at
 		FROM users
 		WHERE email = $1
 	`
 
-	err := tx.QueryRowContext(ctx, query, email).Scan(
-		&u.ID,
-		&u.Email,
-		&u.FirstName,
-		&u.LastName,
-		&u.CreatedAt,
-		&u.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, domain.ErrNotFound
-	}
+	rows, err := dbContext.Tx.Query(ctx, query, email)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query: %w", err)
 	}
+	defer rows.Close()
 
-	return u, nil
+	user, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[model.User])
+	if err == pgx.ErrNoRows {
+		return nil, domain.ErrNotFound
+	} else if err != nil {
+		return nil, fmt.Errorf("failed to collect one row: %w", err)
+	}
+	return user, nil
 }
 
 // Update updates an existing user
-func (r *PostgresRepository) Update(ctx context.Context, id string, u *model.UserUpdate) (*model.User, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+func (r *PostgresRepository) Update(ctx context.Context, id string, cmd *model.UpdateUserCommand) (*model.User, error) {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return nil, db.ErrNoDBContext
 	}
 	// Build dynamic update query based on provided fields
@@ -146,40 +135,34 @@ func (r *PostgresRepository) Update(ctx context.Context, id string, u *model.Use
 	args := []any{time.Now()}
 	argIndex := 2
 
-	if u.Email != nil {
+	if cmd.Email != nil {
 		query += fmt.Sprintf(`, email = $%d`, argIndex)
-		args = append(args, *u.Email)
+		args = append(args, *cmd.Email)
 		argIndex++
 	}
-	if u.FirstName != nil {
+	if cmd.FirstName != nil {
 		query += fmt.Sprintf(`, first_name = $%d`, argIndex)
-		args = append(args, *u.FirstName)
+		args = append(args, *cmd.FirstName)
 		argIndex++
 	}
-	if u.LastName != nil {
+	if cmd.LastName != nil {
 		query += fmt.Sprintf(`, last_name = $%d`, argIndex)
-		args = append(args, *u.LastName)
+		args = append(args, *cmd.LastName)
 		argIndex++
 	}
 
 	query += fmt.Sprintf(` WHERE id = $%d RETURNING id, email, first_name, last_name, created_at, updated_at`, argIndex)
 	args = append(args, id)
 
-	updatedUser := &model.User{}
-	err := tx.QueryRowContext(ctx, query, args...).Scan(
-		&updatedUser.ID,
-		&updatedUser.Email,
-		&updatedUser.FirstName,
-		&updatedUser.LastName,
-		&updatedUser.CreatedAt,
-		&updatedUser.UpdatedAt,
-	)
-
-	if err == sql.ErrNoRows {
-		return nil, domain.ErrNotFound
-	}
+	rows, err := dbContext.Tx.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query: %w", err)
+	}
+	defer rows.Close()
+
+	updatedUser, err := pgx.CollectOneRow(rows, pgx.RowToAddrOfStructByName[model.User])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect one row: %w", err)
 	}
 
 	return updatedUser, nil
@@ -187,33 +170,23 @@ func (r *PostgresRepository) Update(ctx context.Context, id string, u *model.Use
 
 // Delete deletes a user by ID
 func (r *PostgresRepository) Delete(ctx context.Context, id string) error {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return db.ErrNoDBContext
 	}
-	query := `DELETE FROM users WHERE id = $1`
-	_, err := tx.ExecContext(ctx, query, id)
-	if err != nil {
-		return err
-	}
 
-	// Verify deletion by checking if user still exists
-	_, checkErr := r.GetByID(ctx, id)
-	if checkErr == nil {
-		// User still exists, deletion failed
-		return domain.ErrNotFound
+	query := `DELETE FROM users WHERE id = $1`
+	_, err := dbContext.Tx.Exec(ctx, query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
 	}
-	if checkErr != domain.ErrNotFound {
-		return checkErr
-	}
-	// User was deleted successfully
 	return nil
 }
 
 // List retrieves a list of users with pagination
 func (r *PostgresRepository) List(ctx context.Context, limit, offset int) ([]*model.User, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return nil, db.ErrNoDBContext
 	}
 	query := `
@@ -223,31 +196,15 @@ func (r *PostgresRepository) List(ctx context.Context, limit, offset int) ([]*mo
 		LIMIT $1 OFFSET $2
 	`
 
-	rows, err := tx.QueryContext(ctx, query, limit, offset)
+	rows, err := dbContext.Tx.Query(ctx, query, limit, offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query: %w", err)
 	}
 	defer rows.Close()
 
-	var users []*model.User
-	for rows.Next() {
-		u := &model.User{}
-		err := rows.Scan(
-			&u.ID,
-			&u.Email,
-			&u.FirstName,
-			&u.LastName,
-			&u.CreatedAt,
-			&u.UpdatedAt,
-		)
-		if err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-
-	if err = rows.Err(); err != nil {
-		return nil, err
+	users, err := pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[model.User])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect rows: %w", err)
 	}
 
 	return users, nil
@@ -255,13 +212,14 @@ func (r *PostgresRepository) List(ctx context.Context, limit, offset int) ([]*mo
 
 // Count returns the total number of users
 func (r *PostgresRepository) Count(ctx context.Context) (int, error) {
-	tx := postgres.GetTXFromContext(ctx)
-	if tx == nil {
+	dbContext := postgres.GetTXFromContext(ctx)
+	if dbContext == nil {
 		return 0, db.ErrNoDBContext
 	}
+
 	query := `SELECT COUNT(*) FROM users`
 	var count int
-	err := tx.QueryRowContext(ctx, query).Scan(&count)
+	err := dbContext.Tx.QueryRow(ctx, query).Scan(&count)
 	if err != nil {
 		return 0, err
 	}

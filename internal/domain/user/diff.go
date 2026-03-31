@@ -7,7 +7,7 @@ type Changes map[string]any
 
 // GenerateUserChanges generates a changes map from UserUpdate and existing User
 // Only includes fields that are being updated (non-nil in UserUpdate)
-func GenerateUserChanges(update *model.UserUpdate, existing *model.User) Changes {
+func GenerateUserChanges(update *model.UpdateUserCommand, existing *model.User) Changes {
 	changes := make(Changes)
 
 	if update.Email != nil && *update.Email != existing.Email {

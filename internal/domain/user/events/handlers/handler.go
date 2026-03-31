@@ -3,8 +3,8 @@ package handlers
 import (
 	"context"
 
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events"
 	userEvents "github.com/cgund98/go-postgres-api-template/internal/domain/user/events"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 

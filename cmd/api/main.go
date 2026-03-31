@@ -9,29 +9,29 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/service/sns"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/publisher"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/serializer"
 	"github.com/cgund98/go-postgres-api-template/internal/config"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/aws"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/db/postgres"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/publisher"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/serializer"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
-	"github.com/cgund98/go-postgres-api-template/internal/presentation"
-	presentationuser "github.com/cgund98/go-postgres-api-template/internal/presentation/user"
+	httprouter "github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi"
+	httpuser "github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi/user"
 )
 
 var logger = observability.Logger
 
 func main() {
 	// Load configuration
-	cfg, err := config.LoadSettings()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		logger.Error("Failed to load settings", "error", err)
 		os.Exit(1)
 	}
 
 	// Initialize database
-	dbPool, err := postgres.NewPool(cfg.Database.URL)
+	dbPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("Failed to connect to database", "error", err)
 		os.Exit(1)
@@ -39,7 +39,7 @@ func main() {
 	defer dbPool.Close()
 
 	// Initialize AWS clients
-	awsSession, err := aws.NewSession(cfg.AWS)
+	awsSession, err := aws.NewSession(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize AWS session", "error", err)
 		os.Exit(1)
@@ -48,17 +48,17 @@ func main() {
 
 	// Initialize event publisher
 	serializer := serializer.NewJSONSerializer()
-	eventPub := publisher.NewSNSPublisher(cfg.Events.TopicARN, serializer, snsClient)
-	logger.Info("event publisher initialized", "topic_arn", cfg.Events.TopicARN)
+	eventPub := publisher.NewSNSPublisher(cfg.EventsTopicArn, serializer, snsClient)
+	logger.Info("event publisher initialized", "topic_arn", cfg.EventsTopicArn)
 
 	// Initialize dependencies
-	deps := presentation.NewDependencies(dbPool, eventPub)
+	deps := httprouter.NewDependencies(dbPool, eventPub)
 
 	// Setup router with Chi and Huma
-	router := presentation.NewRouter()
+	router := httprouter.NewRouter()
 
 	// Register API v1 routes
-	userController := presentationuser.NewUserController(deps.UserService)
+	userController := httpuser.NewUserController(deps.UserService)
 	userController.RegisterRoutes(router.HumaAPI())
 
 	// Health check endpoint (using Chi router directly)
@@ -70,13 +70,13 @@ func main() {
 	})
 
 	server := &http.Server{
-		Addr:    ":" + cfg.Server.Port,
+		Addr:    ":" + cfg.ServerPort,
 		Handler: router,
 	}
 
 	// Start server in a goroutine
 	go func() {
-		logger.Info("Server starting on port", "port", cfg.Server.Port)
+		logger.Info("Server starting on port", "port", cfg.ServerPort)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("Server failed to start", "error", err)
 			os.Exit(1)

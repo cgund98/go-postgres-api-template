@@ -1,7 +1,7 @@
 package events
 
 import (
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events"
 )
 
 /** -------------------------------- UserCreatedEvent -------------------------------- */

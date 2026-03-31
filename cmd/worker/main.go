@@ -9,12 +9,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/sqs"
 
+	awsUtils "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/consumer"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/deserializer"
 	"github.com/cgund98/go-postgres-api-template/internal/config"
 	userEvents "github.com/cgund98/go-postgres-api-template/internal/domain/user/events"
 	"github.com/cgund98/go-postgres-api-template/internal/domain/user/events/handlers"
-	awsUtils "github.com/cgund98/go-postgres-api-template/internal/infrastructure/aws"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/consumer"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/deserializer"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
@@ -25,14 +25,14 @@ func main() {
 	logger.Info("Starting worker...")
 
 	// Load configuration
-	cfg, err := config.LoadSettings()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		logger.Error("Failed to load settings", "error", err)
 		os.Exit(1)
 	}
 
 	// Initialize AWS clients
-	awsSession, err := awsUtils.NewSession(cfg.AWS)
+	awsSession, err := awsUtils.NewSession(cfg)
 	if err != nil {
 		logger.Error("Failed to initialize AWS session", "error", err)
 		os.Exit(1)
@@ -46,15 +46,15 @@ func main() {
 
 	// Create consumers
 	userCreatedConsumer := consumer.NewSQSConsumer[*userEvents.UserCreatedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserCreated,
+		QueueURL:            cfg.EventsQueueURLUserCreated,
 		MaxNumberOfMessages: aws.Int64(1),
 	})
 	userUpdatedConsumer := consumer.NewSQSConsumer[*userEvents.UserUpdatedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserUpdated,
+		QueueURL:            cfg.EventsQueueURLUserUpdated,
 		MaxNumberOfMessages: aws.Int64(1),
 	})
 	userDeletedConsumer := consumer.NewSQSConsumer[*userEvents.UserDeletedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserDeleted,
+		QueueURL:            cfg.EventsQueueURLUserDeleted,
 		MaxNumberOfMessages: aws.Int64(1),
 	})
 

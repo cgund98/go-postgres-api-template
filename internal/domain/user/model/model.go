@@ -12,15 +12,15 @@ type User struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-// UserCreate represents data needed to create a new user
-type UserCreate struct {
+// CreateUserCommand represents data needed to create a new user
+type CreateUserCommand struct {
 	Email     string `json:"email"`
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 }
 
-// UserUpdate represents data needed to update a user
-type UserUpdate struct {
+// UpdateUserCommand represents data needed to update a user
+type UpdateUserCommand struct {
 	Email     *string `json:"email,omitempty"`
 	FirstName *string `json:"first_name,omitempty"`
 	LastName  *string `json:"last_name,omitempty"`
