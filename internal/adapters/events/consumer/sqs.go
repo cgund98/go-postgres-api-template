@@ -6,12 +6,13 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
 	mockaws "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
-	"github.com/cgund98/go-postgres-api-template/internal/adapters/events"
-	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/deserializer"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/events"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/events/registry"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
@@ -24,26 +25,26 @@ const (
 
 type SQSConsumerOptions struct {
 	QueueURL            string
-	MaxNumberOfMessages *int64
-	VisibilityTimeout   *int64
-	WaitTimeSeconds     *int64
+	MaxNumberOfMessages *int32
+	VisibilityTimeout   *int32
+	WaitTimeSeconds     *int32
 }
 
 // SQSConsumer implements Consumer using AWS SQS
-type SQSConsumer[T events.Event] struct {
+type SQSConsumer struct {
 	queueURL            string
 	sqsClient           mockaws.SQSClientInterface
-	maxNumberOfMessages int64
-	visibilityTimeout   int64
-	waitTimeSeconds     int64
+	maxNumberOfMessages int32
+	visibilityTimeout   int32
+	waitTimeSeconds     int32
 	logger              *slog.Logger
 }
 
 // NewSQSConsumer creates a new SQS consumer
-func NewSQSConsumer[T events.Event](sqsClient mockaws.SQSClientInterface, options SQSConsumerOptions) *SQSConsumer[T] {
-	var maxNumberOfMessages = int64(defaultMaxNumberOfMessages)
-	var visibilityTimeout = int64(defaultVisibilityTimeout)
-	var waitTimeSeconds = int64(defaultWaitTimeSeconds)
+func NewSQSConsumer(sqsClient mockaws.SQSClientInterface, options SQSConsumerOptions) *SQSConsumer {
+	var maxNumberOfMessages int32 = defaultMaxNumberOfMessages
+	var visibilityTimeout int32 = defaultVisibilityTimeout
+	var waitTimeSeconds int32 = defaultWaitTimeSeconds
 
 	if options.MaxNumberOfMessages != nil {
 		maxNumberOfMessages = *options.MaxNumberOfMessages
@@ -59,7 +60,7 @@ func NewSQSConsumer[T events.Event](sqsClient mockaws.SQSClientInterface, option
 
 	logger := observability.Logger.With("queueURL", options.QueueURL)
 
-	return &SQSConsumer[T]{
+	return &SQSConsumer{
 		queueURL:            options.QueueURL,
 		maxNumberOfMessages: maxNumberOfMessages,
 		visibilityTimeout:   visibilityTimeout,
@@ -70,9 +71,8 @@ func NewSQSConsumer[T events.Event](sqsClient mockaws.SQSClientInterface, option
 }
 
 // Ack deletes a message from SQS
-func (c *SQSConsumer[T]) Ack(_ context.Context, messageID string) error {
-
-	_, err := c.sqsClient.DeleteMessage(&sqs.DeleteMessageInput{
+func (c *SQSConsumer) Ack(ctx context.Context, messageID string) error {
+	_, err := c.sqsClient.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.queueURL),
 		ReceiptHandle: aws.String(messageID),
 	})
@@ -84,16 +84,16 @@ func (c *SQSConsumer[T]) Ack(_ context.Context, messageID string) error {
 }
 
 // BatchAck deletes a batch of messages from SQS
-func (c *SQSConsumer[T]) BatchAck(_ context.Context, messageIDs []string) error {
-	entries := make([]*sqs.DeleteMessageBatchRequestEntry, len(messageIDs))
+func (c *SQSConsumer) BatchAck(ctx context.Context, messageIDs []string) error {
+	entries := make([]sqstypes.DeleteMessageBatchRequestEntry, len(messageIDs))
 	for i, messageID := range messageIDs {
-		entries[i] = &sqs.DeleteMessageBatchRequestEntry{
+		entries[i] = sqstypes.DeleteMessageBatchRequestEntry{
 			Id:            aws.String(messageID),
 			ReceiptHandle: aws.String(messageID),
 		}
 	}
 
-	_, err := c.sqsClient.DeleteMessageBatch(&sqs.DeleteMessageBatchInput{
+	_, err := c.sqsClient.DeleteMessageBatch(ctx, &sqs.DeleteMessageBatchInput{
 		QueueUrl: aws.String(c.queueURL),
 		Entries:  entries,
 	})
@@ -107,12 +107,12 @@ func (c *SQSConsumer[T]) BatchAck(_ context.Context, messageIDs []string) error 
 
 // processBatchOfSingleMessages retrieves a batch of sqs messages from SQS
 // and processes them one by one
-func (c *SQSConsumer[T]) processBatchOfSingleMessages(ctx context.Context, deserializer deserializer.Deserializer[T], handler events.Handler[T]) {
-	message, err := c.sqsClient.ReceiveMessage(&sqs.ReceiveMessageInput{
+func (c *SQSConsumer) processBatchOfSingleMessages(ctx context.Context, router *events.Router) {
+	message, err := c.sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl:            aws.String(c.queueURL),
-		MaxNumberOfMessages: aws.Int64(c.maxNumberOfMessages),
-		VisibilityTimeout:   aws.Int64(c.visibilityTimeout),
-		WaitTimeSeconds:     aws.Int64(c.waitTimeSeconds),
+		MaxNumberOfMessages: c.maxNumberOfMessages,
+		VisibilityTimeout:   c.visibilityTimeout,
+		WaitTimeSeconds:     c.waitTimeSeconds,
 	})
 	if err != nil {
 		c.logger.Error("failed to receive sqs messages", "error", err)
@@ -125,15 +125,21 @@ func (c *SQSConsumer[T]) processBatchOfSingleMessages(ctx context.Context, deser
 	}
 
 	for _, message := range message.Messages {
-		event, err := deserializer.Deserialize([]byte(*message.Body))
-		if err != nil {
-			c.logger.Error("failed to deserialize event", "error", err)
+		var envelope registry.Envelope
+		if message.Body == nil {
+			c.logger.Error("message body is nil")
 			return
 		}
 
-		err = handler.Handle(ctx, event)
+		err := envelope.Unmarshal([]byte(*message.Body))
 		if err != nil {
-			c.logger.Error("failed to handle event", "error", err)
+			c.logger.Error("failed to unmarshal envelope", "error", err)
+			return
+		}
+
+		err = router.Route(ctx, envelope)
+		if err != nil {
+			c.logger.Error("failed to route event", "error", err)
 			return
 		}
 
@@ -143,11 +149,10 @@ func (c *SQSConsumer[T]) processBatchOfSingleMessages(ctx context.Context, deser
 			return
 		}
 	}
-
 }
 
 // Start starts consuming messages from SQS. This will begin in a new goroutine and return immediately.
-func (c *SQSConsumer[T]) Start(ctx context.Context, deserializer deserializer.Deserializer[T], handler events.Handler[T]) {
+func (c *SQSConsumer) Start(ctx context.Context, router *events.Router) {
 	go func() {
 		c.logger.Info("starting sqs consumer")
 		for {
@@ -156,74 +161,11 @@ func (c *SQSConsumer[T]) Start(ctx context.Context, deserializer deserializer.De
 				c.logger.Info("sqs consumer context canceled, stopping")
 				return
 			default:
-				c.processBatchOfSingleMessages(ctx, deserializer, handler)
-			}
-		}
-	}()
-}
-
-func (c *SQSConsumer[T]) processBatchOfMessages(ctx context.Context, deserializer deserializer.Deserializer[T], handler events.BatchHandler[T]) {
-	message, err := c.sqsClient.ReceiveMessage(&sqs.ReceiveMessageInput{
-		QueueUrl:            aws.String(c.queueURL),
-		MaxNumberOfMessages: aws.Int64(c.maxNumberOfMessages),
-		VisibilityTimeout:   aws.Int64(c.visibilityTimeout),
-		WaitTimeSeconds:     aws.Int64(c.waitTimeSeconds),
-	})
-
-	if err != nil {
-		c.logger.Error("failed to receive sqs messages", "error", err)
-		time.Sleep(errorBackoff)
-		return
-	}
-
-	if len(message.Messages) == 0 {
-		return
-	}
-
-	// Deserialize the messages into events
-	events := make([]T, 0, len(message.Messages))
-	for _, message := range message.Messages {
-		event, err := deserializer.Deserialize([]byte(*message.Body))
-		if err != nil {
-			c.logger.Error("failed to deserialize event", "error", err)
-			return
-		}
-		events = append(events, event)
-	}
-
-	// Handle the events
-	err = handler.HandleBatch(ctx, events)
-	if err != nil {
-		c.logger.Error("failed to handle events", "error", err)
-		return
-	}
-
-	// Ack the messages
-	for _, message := range message.Messages {
-		err = c.Ack(ctx, *message.ReceiptHandle)
-		if err != nil {
-			c.logger.Error("failed to ack sqs message", "error", err)
-			return
-		}
-	}
-
-}
-
-// StartBatch starts consuming messages from SQS in batch mode. This will begin in a new goroutine and return immediately.
-func (c *SQSConsumer[T]) StartBatch(ctx context.Context, deserializer deserializer.Deserializer[T], handler events.BatchHandler[T]) {
-	go func() {
-		c.logger.Info("starting sqs consumer in batch mode", "queue_url", c.queueURL)
-		for {
-			select {
-			case <-ctx.Done():
-				c.logger.Info("sqs consumer context canceled, stopping")
-				return
-			default:
-				c.processBatchOfMessages(ctx, deserializer, handler)
+				c.processBatchOfSingleMessages(ctx, router)
 			}
 		}
 	}()
 }
 
 // Make sure the consumer implements the Consumer interface
-var _ Consumer[events.Event] = &SQSConsumer[events.Event]{}
+var _ events.Consumer = &SQSConsumer{}

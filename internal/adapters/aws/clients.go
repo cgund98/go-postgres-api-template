@@ -1,31 +1,27 @@
 package aws
 
 import (
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
-	"github.com/aws/aws-sdk-go/aws/session"
+	"context"
 
-	"github.com/cgund98/go-postgres-api-template/internal/config"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+
+	appconfig "github.com/cgund98/go-postgres-api-template/internal/config"
 )
 
-// NewClients creates new AWS SDK clients
-func NewSession(settings *config.Config) (*session.Session, error) {
-	cfg := &aws.Config{
-		Region: aws.String(settings.AwsRegion),
-	}
-
-	if settings.AwsEndpoint != "" {
-		cfg.Endpoint = aws.String(settings.AwsEndpoint)
+// LoadAWSConfig creates an aws.Config using the v2 SDK.
+// It respects localstack settings for local development.
+func LoadAWSConfig(ctx context.Context, settings *appconfig.Config) (aws.Config, error) {
+	opts := []func(*config.LoadOptions) error{
+		config.WithRegion(settings.AwsRegion),
 	}
 
 	if settings.AwsUseLocalstack {
-		cfg.Credentials = credentials.NewStaticCredentials("test", "test", "")
+		opts = append(opts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider("test", "test", ""),
+		))
 	}
 
-	sess, err := session.NewSession(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	return sess, nil
+	return config.LoadDefaultConfig(ctx, opts...)
 }

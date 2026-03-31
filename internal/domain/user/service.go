@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/publisher"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/events"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/events"
+	v1 "github.com/cgund98/go-postgres-api-template/internal/domain/events/registry/users/v1"
 )
 
 // TransactionManager defines the interface for managing transactions
@@ -17,7 +17,7 @@ type TransactionManager interface {
 type Service struct {
 	repo           Repository
 	txManager      TransactionManager
-	eventPublisher publisher.Publisher
+	eventPublisher events.Publisher
 	// Add other service dependencies here (e.g., invoice service)
 }
 
@@ -25,7 +25,7 @@ type Service struct {
 func NewService(
 	repo Repository,
 	txManager TransactionManager,
-	eventPublisher publisher.Publisher,
+	eventPublisher events.Publisher,
 ) *Service {
 	return &Service{
 		repo:           repo,
@@ -53,8 +53,11 @@ func (s *Service) CreateUser(ctx context.Context, email, firstName, lastName str
 		}
 		createdUser = user
 
-		event := events.NewUserCreatedEvent(createdUser.ID, createdUser.Email)
-		if err := s.eventPublisher.Publish(ctx, event); err != nil {
+		publishArgs := events.PublishArgs{
+			Payload:  &v1.UserCreatedEvent{UserID: createdUser.ID, Email: createdUser.Email},
+			Metadata: events.PublishMetadata{Source: "user-service"},
+		}
+		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
 			return fmt.Errorf("failed to publish user created event: %w", err)
 		}
 
@@ -108,8 +111,11 @@ func (s *Service) PatchUser(ctx context.Context, userID string, update *UpdateUs
 		}
 		updatedUser = updated
 
-		event := events.NewUserUpdatedEvent(updatedUser.ID, changes)
-		if err := s.eventPublisher.Publish(ctx, event); err != nil {
+		publishArgs := events.PublishArgs{
+			Payload:  &v1.UserUpdatedEvent{UserID: updatedUser.ID, Changes: changes},
+			Metadata: events.PublishMetadata{Source: "user-service"},
+		}
+		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
 			return fmt.Errorf("failed to publish user updated event: %w", err)
 		}
 
@@ -155,8 +161,11 @@ func (s *Service) DeleteUser(ctx context.Context, userID string) error {
 			return fmt.Errorf("failed to validate delete user request: %w", err)
 		}
 
-		event := events.NewUserDeletedEvent(user.ID)
-		if err := s.eventPublisher.Publish(ctx, event); err != nil {
+		publishArgs := events.PublishArgs{
+			Payload:  &v1.UserDeletedEvent{UserID: user.ID},
+			Metadata: events.PublishMetadata{Source: "user-service"},
+		}
+		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
 			return fmt.Errorf("failed to publish user deleted event: %w", err)
 		}
 

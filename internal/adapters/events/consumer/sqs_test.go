@@ -7,106 +7,91 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/events"
+	domainEvents "github.com/cgund98/go-postgres-api-template/internal/domain/events"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/events/registry"
+	v1 "github.com/cgund98/go-postgres-api-template/internal/domain/events/registry/users/v1"
 )
 
 // mockSQSClient is a mock implementation of SQS client
 type mockSQSClient struct {
-	deleteMessageFunc           func(*sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error)
-	deleteMessageBatchFunc      func(*sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error)
-	receiveMessageFunc          func(*sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error)
+	deleteMessageFunc           func(context.Context, *sqs.DeleteMessageInput, ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
+	deleteMessageBatchFunc      func(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
+	receiveMessageFunc          func(context.Context, *sqs.ReceiveMessageInput, ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
 	deleteMessageCallCount      int
 	deleteMessageBatchCallCount int
 	receiveMessageCallCount     int
 }
 
-func (m *mockSQSClient) DeleteMessage(input *sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error) {
+func (m *mockSQSClient) DeleteMessage(ctx context.Context, input *sqs.DeleteMessageInput, optFns ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error) {
 	m.deleteMessageCallCount++
 	if m.deleteMessageFunc != nil {
-		return m.deleteMessageFunc(input)
+		return m.deleteMessageFunc(ctx, input, optFns...)
 	}
 	return &sqs.DeleteMessageOutput{}, nil
 }
 
-func (m *mockSQSClient) DeleteMessageBatch(input *sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error) {
+func (m *mockSQSClient) DeleteMessageBatch(ctx context.Context, input *sqs.DeleteMessageBatchInput, optFns ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
 	m.deleteMessageBatchCallCount++
 	if m.deleteMessageBatchFunc != nil {
-		return m.deleteMessageBatchFunc(input)
+		return m.deleteMessageBatchFunc(ctx, input, optFns...)
 	}
 	return &sqs.DeleteMessageBatchOutput{}, nil
 }
 
-func (m *mockSQSClient) ReceiveMessage(input *sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error) {
+func (m *mockSQSClient) ReceiveMessage(ctx context.Context, input *sqs.ReceiveMessageInput, optFns ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
 	m.receiveMessageCallCount++
 	if m.receiveMessageFunc != nil {
-		return m.receiveMessageFunc(input)
+		return m.receiveMessageFunc(ctx, input, optFns...)
 	}
 	return &sqs.ReceiveMessageOutput{}, nil
 }
 
-// mockHandler is a mock implementation of Handler
-type mockHandler struct {
-	handleFunc func(context.Context, *events.UserCreatedEvent) error
-	callCount  int
-	lastEvent  *events.UserCreatedEvent
+// mockEnvelopeHandler implements events.Handler for testing
+type mockEnvelopeHandler struct {
+	handleFunc    func(context.Context, registry.Envelope) error
+	callCount     int
+	lastEnvelopes []registry.Envelope
 }
 
-func (m *mockHandler) Handle(ctx context.Context, event *events.UserCreatedEvent) error {
+func (m *mockEnvelopeHandler) Handle(ctx context.Context, envelope registry.Envelope) error {
 	m.callCount++
-	m.lastEvent = event
+	m.lastEnvelopes = append(m.lastEnvelopes, envelope)
 	if m.handleFunc != nil {
-		return m.handleFunc(ctx, event)
+		return m.handleFunc(ctx, envelope)
 	}
 	return nil
 }
 
-// mockBatchHandler is a mock implementation of BatchHandler
-type mockBatchHandler struct {
-	handleBatchFunc func(context.Context, []*events.UserCreatedEvent) error
-	callCount       int
-	lastEvents      []*events.UserCreatedEvent
-}
+var _ domainEvents.Handler = &mockEnvelopeHandler{}
 
-func (m *mockBatchHandler) HandleBatch(ctx context.Context, eventList []*events.UserCreatedEvent) error {
-	m.callCount++
-	m.lastEvents = eventList
-	if m.handleBatchFunc != nil {
-		return m.handleBatchFunc(ctx, eventList)
+func mustMarshalEnvelope(t *testing.T, payload registry.Payload, source string) string {
+	t.Helper()
+	envelope, err := registry.NewEnvelope(payload, source, "test-correlation-id")
+	if err != nil {
+		t.Fatalf("failed to create envelope: %v", err)
 	}
-	return nil
-}
-
-// mockDeserializer is a mock implementation of Deserializer
-type mockDeserializer struct {
-	deserializeFunc func([]byte) (*events.UserCreatedEvent, error)
-	callCount       int
-}
-
-func (m *mockDeserializer) Deserialize(data []byte) (*events.UserCreatedEvent, error) {
-	m.callCount++
-	if m.deserializeFunc != nil {
-		return m.deserializeFunc(data)
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatalf("failed to marshal envelope: %v", err)
 	}
-	// Default: deserialize the JSON
-	var event events.UserCreatedEvent
-	err := json.Unmarshal(data, &event)
-	return &event, err
+	return string(data)
 }
 
 func TestSQSConsumer_Ack(t *testing.T) {
 	tests := []struct {
 		name          string
 		messageID     string
-		mockFunc      func(*sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error)
+		mockFunc      func(context.Context, *sqs.DeleteMessageInput, ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
 		expectedError bool
 	}{
 		{
 			name:      "successfully acks message",
 			messageID: "test-receipt-handle",
-			mockFunc: func(input *sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error) {
+			mockFunc: func(_ context.Context, input *sqs.DeleteMessageInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error) {
 				if *input.QueueUrl != "https://sqs.us-east-1.amazonaws.com/123456789/test-queue" {
 					t.Errorf("unexpected queue URL: %s", *input.QueueUrl)
 				}
@@ -120,7 +105,7 @@ func TestSQSConsumer_Ack(t *testing.T) {
 		{
 			name:      "returns error when SQS delete fails",
 			messageID: "test-receipt-handle",
-			mockFunc: func(_ *sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error) {
+			mockFunc: func(_ context.Context, _ *sqs.DeleteMessageInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error) {
 				return nil, errors.New("SQS delete failed")
 			},
 			expectedError: true,
@@ -133,7 +118,7 @@ func TestSQSConsumer_Ack(t *testing.T) {
 				deleteMessageFunc: tt.mockFunc,
 			}
 
-			consumer := &SQSConsumer[*events.UserCreatedEvent]{
+			consumer := &SQSConsumer{
 				queueURL:  "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
 				sqsClient: mockClient,
 			}
@@ -160,13 +145,13 @@ func TestSQSConsumer_BatchAck(t *testing.T) {
 	tests := []struct {
 		name          string
 		messageIDs    []string
-		mockFunc      func(*sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error)
+		mockFunc      func(context.Context, *sqs.DeleteMessageBatchInput, ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error)
 		expectedError bool
 	}{
 		{
 			name:       "successfully acks batch of messages",
 			messageIDs: []string{"handle-1", "handle-2", "handle-3"},
-			mockFunc: func(input *sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error) {
+			mockFunc: func(_ context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
 				if *input.QueueUrl != "https://sqs.us-east-1.amazonaws.com/123456789/test-queue" {
 					t.Errorf("unexpected queue URL: %s", *input.QueueUrl)
 				}
@@ -189,7 +174,7 @@ func TestSQSConsumer_BatchAck(t *testing.T) {
 		{
 			name:       "returns error when SQS batch delete fails",
 			messageIDs: []string{"handle-1", "handle-2"},
-			mockFunc: func(_ *sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error) {
+			mockFunc: func(_ context.Context, _ *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
 				return nil, errors.New("SQS batch delete failed")
 			},
 			expectedError: true,
@@ -197,7 +182,7 @@ func TestSQSConsumer_BatchAck(t *testing.T) {
 		{
 			name:       "handles empty batch",
 			messageIDs: []string{},
-			mockFunc: func(input *sqs.DeleteMessageBatchInput) (*sqs.DeleteMessageBatchOutput, error) {
+			mockFunc: func(_ context.Context, input *sqs.DeleteMessageBatchInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageBatchOutput, error) {
 				if len(input.Entries) != 0 {
 					t.Errorf("expected empty entries, got %d", len(input.Entries))
 				}
@@ -213,7 +198,7 @@ func TestSQSConsumer_BatchAck(t *testing.T) {
 				deleteMessageBatchFunc: tt.mockFunc,
 			}
 
-			consumer := &SQSConsumer[*events.UserCreatedEvent]{
+			consumer := &SQSConsumer{
 				queueURL:  "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
 				sqsClient: mockClient,
 			}
@@ -237,11 +222,18 @@ func TestSQSConsumer_BatchAck(t *testing.T) {
 }
 
 func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
+	validEnvelopeBody := func(t *testing.T) string {
+		t.Helper()
+		return mustMarshalEnvelope(t, &v1.UserCreatedEvent{
+			UserID: "user-123",
+			Email:  "test@example.com",
+		}, "test-service")
+	}
+
 	tests := []struct {
 		name                 string
-		sqsMessages          []*sqs.Message
+		sqsMessages          []sqstypes.Message
 		sqsError             error
-		deserializeError     error
 		handlerError         error
 		ackError             error
 		expectedHandlerCalls int
@@ -249,9 +241,9 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 	}{
 		{
 			name: "successfully processes single message",
-			sqsMessages: []*sqs.Message{
+			sqsMessages: []sqstypes.Message{
 				{
-					Body:          aws.String(`{"event_id":"test-id","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test@example.com"}`),
+					Body:          aws.String("placeholder"),
 					ReceiptHandle: aws.String("receipt-handle-1"),
 				},
 			},
@@ -266,39 +258,38 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 		},
 		{
 			name:                 "handles empty message batch",
-			sqsMessages:          []*sqs.Message{},
+			sqsMessages:          []sqstypes.Message{},
 			expectedHandlerCalls: 0,
 			expectedAckCalls:     0,
 		},
 		{
-			name: "handles deserialization error",
-			sqsMessages: []*sqs.Message{
+			name: "handles invalid envelope JSON",
+			sqsMessages: []sqstypes.Message{
 				{
 					Body:          aws.String("invalid json"),
 					ReceiptHandle: aws.String("receipt-handle-1"),
 				},
 			},
-			deserializeError:     errors.New("deserialization failed"),
 			expectedHandlerCalls: 0,
 			expectedAckCalls:     0,
 		},
 		{
 			name: "handles handler error",
-			sqsMessages: []*sqs.Message{
+			sqsMessages: []sqstypes.Message{
 				{
-					Body:          aws.String(`{"event_id":"test-id","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test@example.com"}`),
+					Body:          aws.String("placeholder"),
 					ReceiptHandle: aws.String("receipt-handle-1"),
 				},
 			},
 			handlerError:         errors.New("handler failed"),
 			expectedHandlerCalls: 1,
-			expectedAckCalls:     0, // Should not ack if handler fails
+			expectedAckCalls:     0,
 		},
 		{
 			name: "handles ack error",
-			sqsMessages: []*sqs.Message{
+			sqsMessages: []sqstypes.Message{
 				{
-					Body:          aws.String(`{"event_id":"test-id","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test@example.com"}`),
+					Body:          aws.String("placeholder"),
 					ReceiptHandle: aws.String("receipt-handle-1"),
 				},
 			},
@@ -310,8 +301,16 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Fill in valid envelope bodies for messages that aren't testing invalid JSON
+			for i := range tt.sqsMessages {
+				if tt.sqsMessages[i].Body != nil && *tt.sqsMessages[i].Body == "placeholder" {
+					body := validEnvelopeBody(t)
+					tt.sqsMessages[i].Body = &body
+				}
+			}
+
 			mockClient := &mockSQSClient{
-				receiveMessageFunc: func(_ *sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error) {
+				receiveMessageFunc: func(_ context.Context, _ *sqs.ReceiveMessageInput, _ ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error) {
 					if tt.sqsError != nil {
 						return nil, tt.sqsError
 					}
@@ -319,7 +318,7 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 						Messages: tt.sqsMessages,
 					}, nil
 				},
-				deleteMessageFunc: func(_ *sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error) {
+				deleteMessageFunc: func(_ context.Context, _ *sqs.DeleteMessageInput, _ ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error) {
 					if tt.ackError != nil {
 						return nil, tt.ackError
 					}
@@ -327,24 +326,16 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 				},
 			}
 
-			mockHandler := &mockHandler{
-				handleFunc: func(_ context.Context, _ *events.UserCreatedEvent) error {
+			handler := &mockEnvelopeHandler{
+				handleFunc: func(_ context.Context, _ registry.Envelope) error {
 					return tt.handlerError
 				},
 			}
 
-			mockDeserializer := &mockDeserializer{
-				deserializeFunc: func(data []byte) (*events.UserCreatedEvent, error) {
-					if tt.deserializeError != nil {
-						return nil, tt.deserializeError
-					}
-					var event events.UserCreatedEvent
-					err := json.Unmarshal(data, &event)
-					return &event, err
-				},
-			}
+			router := domainEvents.NewRouter()
+			router.RegisterHandler(v1.EventTypeUserCreated, handler)
 
-			consumer := &SQSConsumer[*events.UserCreatedEvent]{
+			consumer := &SQSConsumer{
 				queueURL:            "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
 				sqsClient:           mockClient,
 				maxNumberOfMessages: 1,
@@ -353,144 +344,10 @@ func TestSQSConsumer_processBatchOfSingleMessages(t *testing.T) {
 				logger:              slog.Default(),
 			}
 
-			consumer.processBatchOfSingleMessages(context.Background(), mockDeserializer, mockHandler)
+			consumer.processBatchOfSingleMessages(context.Background(), router)
 
-			if mockHandler.callCount != tt.expectedHandlerCalls {
-				t.Errorf("expected handler to be called %d times, got %d", tt.expectedHandlerCalls, mockHandler.callCount)
-			}
-
-			if mockClient.deleteMessageCallCount != tt.expectedAckCalls {
-				t.Errorf("expected Ack to be called %d times, got %d", tt.expectedAckCalls, mockClient.deleteMessageCallCount)
-			}
-		})
-	}
-}
-
-func TestSQSConsumer_processBatchOfMessages(t *testing.T) {
-	tests := []struct {
-		name                 string
-		sqsMessages          []*sqs.Message
-		sqsError             error
-		deserializeError     error
-		handlerError         error
-		ackError             error
-		expectedHandlerCalls int
-		expectedAckCalls     int
-	}{
-		{
-			name: "successfully processes batch of messages",
-			sqsMessages: []*sqs.Message{
-				{
-					Body:          aws.String(`{"event_id":"test-id-1","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test1@example.com"}`),
-					ReceiptHandle: aws.String("receipt-handle-1"),
-				},
-				{
-					Body:          aws.String(`{"event_id":"test-id-2","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-456","email":"test2@example.com"}`),
-					ReceiptHandle: aws.String("receipt-handle-2"),
-				},
-			},
-			expectedHandlerCalls: 1,
-			expectedAckCalls:     2,
-		},
-		{
-			name:                 "handles SQS receive error",
-			sqsError:             errors.New("SQS receive failed"),
-			expectedHandlerCalls: 0,
-			expectedAckCalls:     0,
-		},
-		{
-			name:                 "handles empty message batch",
-			sqsMessages:          []*sqs.Message{},
-			expectedHandlerCalls: 0,
-			expectedAckCalls:     0,
-		},
-		{
-			name: "handles deserialization error",
-			sqsMessages: []*sqs.Message{
-				{
-					Body:          aws.String("invalid json"),
-					ReceiptHandle: aws.String("receipt-handle-1"),
-				},
-			},
-			deserializeError:     errors.New("deserialization failed"),
-			expectedHandlerCalls: 0,
-			expectedAckCalls:     0,
-		},
-		{
-			name: "handles handler error",
-			sqsMessages: []*sqs.Message{
-				{
-					Body:          aws.String(`{"event_id":"test-id","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test@example.com"}`),
-					ReceiptHandle: aws.String("receipt-handle-1"),
-				},
-			},
-			handlerError:         errors.New("handler failed"),
-			expectedHandlerCalls: 1,
-			expectedAckCalls:     0, // Should not ack if handler fails
-		},
-		{
-			name: "handles ack error",
-			sqsMessages: []*sqs.Message{
-				{
-					Body:          aws.String(`{"event_id":"test-id","event_type":"user.created","timestamp":"2023-01-01T00:00:00Z","user_id":"user-123","email":"test@example.com"}`),
-					ReceiptHandle: aws.String("receipt-handle-1"),
-				},
-			},
-			ackError:             errors.New("ack failed"),
-			expectedHandlerCalls: 1,
-			expectedAckCalls:     1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			mockClient := &mockSQSClient{
-				receiveMessageFunc: func(_ *sqs.ReceiveMessageInput) (*sqs.ReceiveMessageOutput, error) {
-					if tt.sqsError != nil {
-						return nil, tt.sqsError
-					}
-					return &sqs.ReceiveMessageOutput{
-						Messages: tt.sqsMessages,
-					}, nil
-				},
-				deleteMessageFunc: func(_ *sqs.DeleteMessageInput) (*sqs.DeleteMessageOutput, error) {
-					if tt.ackError != nil {
-						return nil, tt.ackError
-					}
-					return &sqs.DeleteMessageOutput{}, nil
-				},
-			}
-
-			mockBatchHandler := &mockBatchHandler{
-				handleBatchFunc: func(_ context.Context, _ []*events.UserCreatedEvent) error {
-					return tt.handlerError
-				},
-			}
-
-			mockDeserializer := &mockDeserializer{
-				deserializeFunc: func(data []byte) (*events.UserCreatedEvent, error) {
-					if tt.deserializeError != nil {
-						return nil, tt.deserializeError
-					}
-					var event events.UserCreatedEvent
-					err := json.Unmarshal(data, &event)
-					return &event, err
-				},
-			}
-
-			consumer := &SQSConsumer[*events.UserCreatedEvent]{
-				queueURL:            "https://sqs.us-east-1.amazonaws.com/123456789/test-queue",
-				sqsClient:           mockClient,
-				maxNumberOfMessages: 10,
-				visibilityTimeout:   30,
-				waitTimeSeconds:     20,
-				logger:              slog.Default(),
-			}
-
-			consumer.processBatchOfMessages(context.Background(), mockDeserializer, mockBatchHandler)
-
-			if mockBatchHandler.callCount != tt.expectedHandlerCalls {
-				t.Errorf("expected batch handler to be called %d times, got %d", tt.expectedHandlerCalls, mockBatchHandler.callCount)
+			if handler.callCount != tt.expectedHandlerCalls {
+				t.Errorf("expected handler to be called %d times, got %d", tt.expectedHandlerCalls, handler.callCount)
 			}
 
 			if mockClient.deleteMessageCallCount != tt.expectedAckCalls {

@@ -20,10 +20,8 @@ type Config struct {
 	AwsUseLocalstack bool   `split_words:"true"`
 	AwsEndpoint      string `split_words:"true"`
 
-	EventsTopicArn            string `split_words:"true"`
-	EventsQueueURLUserCreated string `split_words:"true"`
-	EventsQueueURLUserUpdated string `split_words:"true"`
-	EventsQueueURLUserDeleted string `split_words:"true"`
+	EventsTopicArn     string `split_words:"true"`
+	EventsQueueURLUser string `split_words:"true"`
 
 	ServerPort string `split_words:"true" default:"8080"`
 

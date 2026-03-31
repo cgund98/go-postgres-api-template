@@ -8,12 +8,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aws/aws-sdk-go/service/sns"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
+	awsUtils "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
 	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/publisher"
-	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/serializer"
 	"github.com/cgund98/go-postgres-api-template/internal/config"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 	httprouter "github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi"
@@ -23,6 +23,8 @@ import (
 var logger = observability.Logger
 
 func main() {
+	ctx := context.Background()
+
 	// Load configuration
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -31,24 +33,29 @@ func main() {
 	}
 
 	// Initialize database
-	dbPool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
+	dbPool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
 		logger.Error("Failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer dbPool.Close()
 
-	// Initialize AWS clients
-	awsSession, err := aws.NewSession(cfg)
+	// Initialize AWS config
+	awsCfg, err := awsUtils.LoadAWSConfig(ctx, cfg)
 	if err != nil {
-		logger.Error("Failed to initialize AWS session", "error", err)
+		logger.Error("Failed to load AWS config", "error", err)
 		os.Exit(1)
 	}
-	snsClient := sns.New(awsSession)
+
+	// Initialize SNS client
+	snsClient := sns.NewFromConfig(awsCfg, func(o *sns.Options) {
+		if cfg.AwsEndpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.AwsEndpoint)
+		}
+	})
 
 	// Initialize event publisher
-	serializer := serializer.NewJSONSerializer()
-	eventPub := publisher.NewSNSPublisher(cfg.EventsTopicArn, serializer, snsClient)
+	eventPub := publisher.NewSNSPublisher(cfg.EventsTopicArn, snsClient)
 	logger.Info("event publisher initialized", "topic_arn", cfg.EventsTopicArn)
 
 	// Initialize dependencies
@@ -90,10 +97,10 @@ func main() {
 
 	logger.Info("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Error("Server forced to shutdown", "error", err)
 		os.Exit(1)
 	}
