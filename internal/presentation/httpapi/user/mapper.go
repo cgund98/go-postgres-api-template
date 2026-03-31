@@ -2,11 +2,11 @@ package user
 
 import (
 	apiv1user "github.com/cgund98/go-postgres-api-template/api/v1/user"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/user"
 )
 
 // ToUserResponse converts a domain user to a response DTO
-func toUserResponse(u model.User) apiv1user.Response {
+func toUserResponse(u user.User) apiv1user.Response {
 	return apiv1user.Response{
 		ID:        u.ID,
 		Email:     u.Email,

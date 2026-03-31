@@ -2,14 +2,13 @@ package user
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/cgund98/go-postgres-api-template/api/v1/core"
 	apiv1user "github.com/cgund98/go-postgres-api-template/api/v1/user"
-	"github.com/cgund98/go-postgres-api-template/internal/domain"
 	"github.com/cgund98/go-postgres-api-template/internal/domain/user"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
 	"github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi"
 )
 
@@ -28,19 +27,44 @@ func NewUserController(service *user.Service) *Controller {
 // RegisterRoutes registers all user routes with the Huma API
 func (c *Controller) RegisterRoutes(api huma.API) {
 	// Create user
-	huma.Post(api, "/api/v1/users", c.CreateUser, huma.OperationTags("Users"))
+	huma.Register(api, huma.Operation{
+		Path:    "/api/v1/users",
+		Method:  http.MethodPost,
+		Summary: "Create a new user",
+		Tags:    []string{"Users"},
+	}, c.CreateUser)
 
 	// Get user
-	huma.Get(api, "/api/v1/users/{id}", c.GetUser, huma.OperationTags("Users"))
+	huma.Register(api, huma.Operation{
+		Path:    "/api/v1/users/{id}",
+		Method:  http.MethodGet,
+		Summary: "Get a user by ID",
+		Tags:    []string{"Users"},
+	}, c.GetUser)
 
 	// List users
-	huma.Get(api, "/api/v1/users", c.ListUsers, huma.OperationTags("Users"))
+	huma.Register(api, huma.Operation{
+		Path:    "/api/v1/users",
+		Method:  http.MethodGet,
+		Summary: "List users",
+		Tags:    []string{"Users"},
+	}, c.ListUsers)
 
 	// Update user
-	huma.Patch(api, "/api/v1/users/{id}", c.UpdateUser, huma.OperationTags("Users"))
+	huma.Register(api, huma.Operation{
+		Path:    "/api/v1/users/{id}",
+		Method:  http.MethodPatch,
+		Summary: "Update a user",
+		Tags:    []string{"Users"},
+	}, c.UpdateUser)
 
 	// Delete user
-	huma.Delete(api, "/api/v1/users/{id}", c.DeleteUser, huma.OperationTags("Users"))
+	huma.Register(api, huma.Operation{
+		Path:    "/api/v1/users/{id}",
+		Method:  http.MethodDelete,
+		Summary: "Delete a user",
+		Tags:    []string{"Users"},
+	}, c.DeleteUser)
 }
 
 // CreateUser handles POST /api/v1/users
@@ -62,12 +86,8 @@ func (c *Controller) GetUser(ctx context.Context, input *apiv1user.GetUserInput)
 		return nil, httpapi.NewHumaError(err)
 	}
 
-	if u == nil {
-		return nil, httpapi.NewHumaError(domain.ErrNotFound)
-	}
-
 	return &apiv1user.GetUserOutput{
-		Body: toUserResponse(*u),
+		Body: toUserResponse(u),
 	}, nil
 }
 
@@ -84,10 +104,7 @@ func (c *Controller) ListUsers(ctx context.Context, input *apiv1user.ListUsersIn
 
 	var usersResponse []apiv1user.Response
 	for _, u := range users {
-		if u == nil {
-			continue
-		}
-		usersResponse = append(usersResponse, toUserResponse(*u))
+		usersResponse = append(usersResponse, toUserResponse(u))
 	}
 
 	totalPages := httpapi.CalculateTotalPages(total, normalizedLimit)
@@ -106,7 +123,7 @@ func (c *Controller) ListUsers(ctx context.Context, input *apiv1user.ListUsersIn
 
 // UpdateUser handles PATCH /api/v1/users/{id}
 func (c *Controller) UpdateUser(ctx context.Context, input *apiv1user.UpdateUserInput) (*apiv1user.UpdateUserOutput, error) {
-	update := &model.UpdateUserCommand{
+	update := &user.UpdateUserCommand{
 		Email:     input.Body.Email,
 		FirstName: input.Body.FirstName,
 		LastName:  input.Body.LastName,

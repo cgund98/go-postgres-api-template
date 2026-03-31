@@ -1,31 +1,29 @@
-package repo
+package user
 
 import (
 	"context"
-
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
 )
 
 // Repository defines the interface for user data access
 // The repository extracts the database context from the context.Context internally
 type Repository interface {
 	// Create creates a new user
-	Create(ctx context.Context, u *model.CreateUserCommand) (*model.User, error)
+	Create(ctx context.Context, u *CreateUserCommand) (User, error)
 
 	// GetByID retrieves a user by ID
-	GetByID(ctx context.Context, id string) (*model.User, error)
+	GetByID(ctx context.Context, id string) (User, error)
 
 	// GetByEmail retrieves a user by email
-	GetByEmail(ctx context.Context, email string) (*model.User, error)
+	GetByEmail(ctx context.Context, email string) (User, error)
 
 	// Update updates an existing user
-	Update(ctx context.Context, id string, u *model.UpdateUserCommand) (*model.User, error)
+	Update(ctx context.Context, id string, u *UpdateUserCommand) (User, error)
 
 	// Delete deletes a user by ID
 	Delete(ctx context.Context, id string) error
 
 	// List retrieves a list of users with pagination
-	List(ctx context.Context, limit, offset int) ([]*model.User, error)
+	List(ctx context.Context, limit, offset int) ([]User, error)
 
 	// Count returns the total number of users
 	Count(ctx context.Context) (int, error)

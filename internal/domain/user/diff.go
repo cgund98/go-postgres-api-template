@@ -1,13 +1,11 @@
 package user
 
-import "github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
-
 // Changes represents field changes for an update event
 type Changes map[string]any
 
 // GenerateUserChanges generates a changes map from UserUpdate and existing User
 // Only includes fields that are being updated (non-nil in UserUpdate)
-func GenerateUserChanges(update *model.UpdateUserCommand, existing *model.User) Changes {
+func GenerateUserChanges(update *UpdateUserCommand, existing User) Changes {
 	changes := make(Changes)
 
 	if update.Email != nil && *update.Email != existing.Email {

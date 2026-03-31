@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/cgund98/go-postgres-api-template/internal/domain"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/model"
 )
 
 const emailRegex = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
@@ -16,7 +15,7 @@ const emailRegex = `^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`
 var emailRegexp = regexp.MustCompile(emailRegex)
 
 // ValidateCreate validates UserCreate data
-func ValidateCreate(u *model.CreateUserCommand) error {
+func ValidateCreate(u *CreateUserCommand) error {
 	if u.Email == "" {
 		return fmt.Errorf("%w: email is required", domain.ErrInvalidInput)
 	}
@@ -33,7 +32,7 @@ func ValidateCreate(u *model.CreateUserCommand) error {
 }
 
 // ValidateUpdate validates UserUpdate data
-func ValidateUpdate(u *model.UpdateUserCommand) error {
+func ValidateUpdate(u *UpdateUserCommand) error {
 	if u.Email != nil && !isValidEmail(*u.Email) {
 		return fmt.Errorf("%w: invalid email format", domain.ErrInvalidInput)
 	}
@@ -53,8 +52,7 @@ func isValidEmail(email string) bool {
 
 // validateCreateUserRequest validates create user request
 func (s *Service) validateCreateUserRequest(ctx context.Context, email, firstName, lastName string) error {
-	// Validate input
-	if err := ValidateCreate(&model.CreateUserCommand{
+	if err := ValidateCreate(&CreateUserCommand{
 		Email:     email,
 		FirstName: firstName,
 		LastName:  lastName,
@@ -62,39 +60,35 @@ func (s *Service) validateCreateUserRequest(ctx context.Context, email, firstNam
 		return err
 	}
 
-	// Check email uniqueness
-	existing, err := s.repo.GetByEmail(ctx, email)
-	if err != nil && !errors.Is(err, domain.ErrNotFound) {
-		return fmt.Errorf("failed to get user by email: %w", err)
-	}
-	if existing != nil {
+	_, err := s.repo.GetByEmail(ctx, email)
+	if err == nil {
 		return domain.ErrAlreadyExists
+	}
+	if !errors.Is(err, domain.ErrNotFound) {
+		return fmt.Errorf("failed to get user by email: %w", err)
 	}
 
 	return nil
 }
 
 // validatePatchUserRequest validates patch user request and returns existing user
-func (s *Service) validatePatchUserRequest(ctx context.Context, userID string, update *model.UpdateUserCommand) (*model.User, error) {
-	// Validate update input
+func (s *Service) validatePatchUserRequest(ctx context.Context, userID string, update *UpdateUserCommand) (User, error) {
 	if err := ValidateUpdate(update); err != nil {
-		return nil, err
+		return User{}, err
 	}
 
-	// Get existing user
 	existing, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, err
+		return User{}, err
 	}
 
-	// If email is being updated, check uniqueness
 	if update.Email != nil && *update.Email != existing.Email {
 		emailUser, err := s.repo.GetByEmail(ctx, *update.Email)
-		if err != nil {
-			return nil, err
+		if err == nil && emailUser.ID != userID {
+			return User{}, domain.ErrAlreadyExists
 		}
-		if emailUser != nil && emailUser.ID != userID {
-			return nil, domain.ErrAlreadyExists
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			return User{}, err
 		}
 	}
 
@@ -102,10 +96,10 @@ func (s *Service) validatePatchUserRequest(ctx context.Context, userID string, u
 }
 
 // validateDeleteUserRequest validates delete user request and returns existing user
-func (s *Service) validateDeleteUserRequest(ctx context.Context, userID string) (*model.User, error) {
+func (s *Service) validateDeleteUserRequest(ctx context.Context, userID string) (User, error) {
 	user, err := s.repo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, err
+		return User{}, err
 	}
 	return user, nil
 }

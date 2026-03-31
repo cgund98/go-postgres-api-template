@@ -6,8 +6,8 @@ import (
 
 	"github.com/cgund98/go-postgres-api-template/internal/adapters/db/postgres"
 	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/publisher"
+	useradapters "github.com/cgund98/go-postgres-api-template/internal/adapters/user"
 	"github.com/cgund98/go-postgres-api-template/internal/domain/user"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/repo"
 )
 
 // Dependencies holds all dependencies for the presentation layer
@@ -23,7 +23,7 @@ func NewDependencies(dbPool *pgxpool.Pool, eventPub publisher.Publisher) *Depend
 	txManager := postgres.NewTransactionManager(dbPool, pgx.TxOptions{})
 
 	// Create repository (it extracts DB from context internally)
-	userRepo := repo.NewPostgresRepository()
+	userRepo := useradapters.NewPostgresRepository()
 
 	// Create service
 	userService := user.NewService(userRepo, txManager, eventPub)
