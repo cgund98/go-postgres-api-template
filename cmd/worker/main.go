@@ -6,71 +6,68 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
 
+	awsUtils "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
+	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/consumer"
 	"github.com/cgund98/go-postgres-api-template/internal/config"
-	userEvents "github.com/cgund98/go-postgres-api-template/internal/domain/user/events"
-	"github.com/cgund98/go-postgres-api-template/internal/domain/user/events/handlers"
-	awsUtils "github.com/cgund98/go-postgres-api-template/internal/infrastructure/aws"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/consumer"
-	"github.com/cgund98/go-postgres-api-template/internal/infrastructure/events/deserializer"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/events"
+	userEventsV1 "github.com/cgund98/go-postgres-api-template/internal/domain/events/registry/users/v1"
+	"github.com/cgund98/go-postgres-api-template/internal/domain/user"
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
 var logger = observability.Logger
 
 func main() {
+	ctx := context.Background()
 
 	logger.Info("Starting worker...")
 
 	// Load configuration
-	cfg, err := config.LoadSettings()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		logger.Error("Failed to load settings", "error", err)
 		os.Exit(1)
 	}
 
-	// Initialize AWS clients
-	awsSession, err := awsUtils.NewSession(cfg.AWS)
+	// Initialize AWS config
+	awsCfg, err := awsUtils.LoadAWSConfig(ctx, cfg)
 	if err != nil {
-		logger.Error("Failed to initialize AWS session", "error", err)
+		logger.Error("Failed to load AWS config", "error", err)
 		os.Exit(1)
 	}
-	sqsClient := sqs.New(awsSession)
+
+	// Initialize SQS client
+	sqsClient := sqs.NewFromConfig(awsCfg, func(o *sqs.Options) {
+		if cfg.AwsEndpoint != "" {
+			o.BaseEndpoint = aws.String(cfg.AwsEndpoint)
+		}
+	})
 
 	// Register event handlers
-	userCreatedHandler := handlers.NewUserCreatedHandler()
-	userUpdatedHandler := handlers.NewUserUpdatedHandler()
-	userDeletedHandler := handlers.NewUserDeletedHandler()
+	userCreatedHandler := user.NewCreateUserHandler()
+	userUpdatedHandler := user.NewUpdateUserHandler()
+	userDeletedHandler := user.NewDeleteUserHandler()
 
-	// Create consumers
-	userCreatedConsumer := consumer.NewSQSConsumer[*userEvents.UserCreatedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserCreated,
-		MaxNumberOfMessages: aws.Int64(1),
-	})
-	userUpdatedConsumer := consumer.NewSQSConsumer[*userEvents.UserUpdatedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserUpdated,
-		MaxNumberOfMessages: aws.Int64(1),
-	})
-	userDeletedConsumer := consumer.NewSQSConsumer[*userEvents.UserDeletedEvent](sqsClient, consumer.SQSConsumerOptions{
-		QueueURL:            cfg.Events.QueueURLUserDeleted,
-		MaxNumberOfMessages: aws.Int64(1),
-	})
+	router := events.NewRouter()
+	router.RegisterHandler(userEventsV1.EventTypeUserCreated, userCreatedHandler)
+	router.RegisterHandler(userEventsV1.EventTypeUserUpdated, userUpdatedHandler)
+	router.RegisterHandler(userEventsV1.EventTypeUserDeleted, userDeletedHandler)
 
-	// Create deserializers
-	userCreatedDeserializer := deserializer.NewJSONDeserializer[*userEvents.UserCreatedEvent]()
-	userUpdatedDeserializer := deserializer.NewJSONDeserializer[*userEvents.UserUpdatedEvent]()
-	userDeletedDeserializer := deserializer.NewJSONDeserializer[*userEvents.UserDeletedEvent]()
+	// Create consumer
+	userConsumer := consumer.NewSQSConsumer(sqsClient, consumer.SQSConsumerOptions{
+		QueueURL:            cfg.EventsQueueURLUser,
+		MaxNumberOfMessages: aws.Int32(1),
+	})
 
 	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	// Start consuming messages
-	userCreatedConsumer.Start(ctx, userCreatedDeserializer, userCreatedHandler)
-	userUpdatedConsumer.Start(ctx, userUpdatedDeserializer, userUpdatedHandler)
-	userDeletedConsumer.Start(ctx, userDeletedDeserializer, userDeletedHandler)
+	userConsumer.Start(ctx, router)
 
 	// Wait for interrupt signal to gracefully shutdown
 	quit := make(chan os.Signal, 1)

@@ -1,6 +1,6 @@
 package user
 
-import "github.com/cgund98/go-postgres-api-template/internal/presentation"
+import "github.com/cgund98/go-postgres-api-template/api/v1/core"
 
 // Input/Output types for Huma operations
 // These define the public API contract
@@ -45,8 +45,8 @@ type ListUsersOutput struct {
 }
 
 type ListUsersResponse struct {
-	Data       []Response                      `json:"data"`
-	Pagination presentation.PaginationResponse `json:"pagination"`
+	Data       []Response              `json:"data"`
+	Pagination core.PaginationResponse `json:"pagination"`
 }
 
 type UpdateUserInput struct {

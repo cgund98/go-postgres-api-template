@@ -35,45 +35,20 @@ fi
 
 echo "Created SNS topic: $TOPIC_ARN"
 
-# Create SQS queues for each event type
+# Create SQS queues
 echo "Creating SQS queues..."
 
-# User events
-echo "Creating user-created queue..."
-USER_CREATED_QUEUE=$(aws --endpoint-url=$ENDPOINT_URL sqs create-queue \
-  --queue-name user-created \
+echo "Creating user-events queue..."
+USER_EVENTS_QUEUE=$(aws --endpoint-url=$ENDPOINT_URL sqs create-queue \
+  --queue-name user-events \
   --region $REGION \
   --output text \
   --query 'QueueUrl' 2>&1) || {
-  echo "Error creating user-created queue:" >&2
-  echo "$USER_CREATED_QUEUE" >&2
+  echo "Error creating user-events queue:" >&2
+  echo "$USER_EVENTS_QUEUE" >&2
   exit 1
 }
-echo "Created queue: $USER_CREATED_QUEUE"
-
-echo "Creating user-updated queue..."
-USER_UPDATED_QUEUE=$(aws --endpoint-url=$ENDPOINT_URL sqs create-queue \
-  --queue-name user-updated \
-  --region $REGION \
-  --output text \
-  --query 'QueueUrl' 2>&1) || {
-  echo "Error creating user-updated queue:" >&2
-  echo "$USER_UPDATED_QUEUE" >&2
-  exit 1
-}
-echo "Created queue: $USER_UPDATED_QUEUE"
-
-echo "Creating user-deleted queue..."
-USER_DELETED_QUEUE=$(aws --endpoint-url=$ENDPOINT_URL sqs create-queue \
-  --queue-name user-deleted \
-  --region $REGION \
-  --output text \
-  --query 'QueueUrl' 2>&1) || {
-  echo "Error creating user-deleted queue:" >&2
-  echo "$USER_DELETED_QUEUE" >&2
-  exit 1
-}
-echo "Created queue: $USER_DELETED_QUEUE"
+echo "Created queue: $USER_EVENTS_QUEUE"
 
 echo "Creating debug queue..."
 DEBUG_QUEUE=$(aws --endpoint-url=$ENDPOINT_URL sqs create-queue \
@@ -90,36 +65,14 @@ echo "Created queue: $DEBUG_QUEUE"
 # Get queue ARNs for subscription
 echo "Getting queue ARNs..."
 
-USER_CREATED_QUEUE_ARN=$(aws --endpoint-url=$ENDPOINT_URL sqs get-queue-attributes \
-  --queue-url "$USER_CREATED_QUEUE" \
+USER_EVENTS_QUEUE_ARN=$(aws --endpoint-url=$ENDPOINT_URL sqs get-queue-attributes \
+  --queue-url "$USER_EVENTS_QUEUE" \
   --attribute-names QueueArn \
   --region $REGION \
   --output text \
   --query 'Attributes.QueueArn' 2>&1) || {
-  echo "Error getting user-created queue ARN:" >&2
-  echo "$USER_CREATED_QUEUE_ARN" >&2
-  exit 1
-}
-
-USER_UPDATED_QUEUE_ARN=$(aws --endpoint-url=$ENDPOINT_URL sqs get-queue-attributes \
-  --queue-url "$USER_UPDATED_QUEUE" \
-  --attribute-names QueueArn \
-  --region $REGION \
-  --output text \
-  --query 'Attributes.QueueArn' 2>&1) || {
-  echo "Error getting user-updated queue ARN:" >&2
-  echo "$USER_UPDATED_QUEUE_ARN" >&2
-  exit 1
-}
-
-USER_DELETED_QUEUE_ARN=$(aws --endpoint-url=$ENDPOINT_URL sqs get-queue-attributes \
-  --queue-url "$USER_DELETED_QUEUE" \
-  --attribute-names QueueArn \
-  --region $REGION \
-  --output text \
-  --query 'Attributes.QueueArn' 2>&1) || {
-  echo "Error getting user-deleted queue ARN:" >&2
-  echo "$USER_DELETED_QUEUE_ARN" >&2
+  echo "Error getting user-events queue ARN:" >&2
+  echo "$USER_EVENTS_QUEUE_ARN" >&2
   exit 1
 }
 
@@ -135,54 +88,22 @@ DEBUG_QUEUE_ARN=$(aws --endpoint-url=$ENDPOINT_URL sqs get-queue-attributes \
 }
 
 # Subscribe queues to SNS topic with filter policies on message attributes
-# FilterPolicy filters messages based on message attributes (event_type in this case)
-# FilterPolicyScope is set to MessageAttributes to explicitly filter on message attributes
 echo "Subscribing queues to SNS topic..."
 
-echo "Subscribing user-created queue..."
-USER_CREATED_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
+echo "Subscribing user-events queue (prefix filter: user.)..."
+USER_EVENTS_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
   --topic-arn "$TOPIC_ARN" \
   --protocol sqs \
-  --notification-endpoint "$USER_CREATED_QUEUE_ARN" \
-  --attributes '{"FilterPolicy":"{\"event_type\":[\"user.created\"]}","FilterPolicyScope":"MessageAttributes","RawMessageDelivery":"true"}' \
+  --notification-endpoint "$USER_EVENTS_QUEUE_ARN" \
+  --attributes '{"FilterPolicy":"{\"event_type\":[{\"prefix\":\"user.\"}]}","FilterPolicyScope":"MessageAttributes","RawMessageDelivery":"true"}' \
   --region $REGION \
   --output text \
   --query 'SubscriptionArn' 2>&1) || {
-  echo "Error subscribing user-created queue:" >&2
-  echo "$USER_CREATED_SUBSCRIPTION_ARN" >&2
+  echo "Error subscribing user-events queue:" >&2
+  echo "$USER_EVENTS_SUBSCRIPTION_ARN" >&2
   exit 1
 }
-echo "Subscribed user-created queue to topic with message attribute filter policy"
-
-echo "Subscribing user-updated queue..."
-USER_UPDATED_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
-  --topic-arn "$TOPIC_ARN" \
-  --protocol sqs \
-  --notification-endpoint "$USER_UPDATED_QUEUE_ARN" \
-  --attributes '{"FilterPolicy":"{\"event_type\":[\"user.updated\"]}","FilterPolicyScope":"MessageAttributes","RawMessageDelivery":"true"}' \
-  --region $REGION \
-  --output text \
-  --query 'SubscriptionArn' 2>&1) || {
-  echo "Error subscribing user-updated queue:" >&2
-  echo "$USER_UPDATED_SUBSCRIPTION_ARN" >&2
-  exit 1
-}
-echo "Subscribed user-updated queue to topic with message attribute filter policy"
-
-echo "Subscribing user-deleted queue..."
-USER_DELETED_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
-  --topic-arn "$TOPIC_ARN" \
-  --protocol sqs \
-  --notification-endpoint "$USER_DELETED_QUEUE_ARN" \
-  --attributes '{"FilterPolicy":"{\"event_type\":[\"user.deleted\"]}","FilterPolicyScope":"MessageAttributes","RawMessageDelivery":"true"}' \
-  --region $REGION \
-  --output text \
-  --query 'SubscriptionArn' 2>&1) || {
-  echo "Error subscribing user-deleted queue:" >&2
-  echo "$USER_DELETED_SUBSCRIPTION_ARN" >&2
-  exit 1
-}
-echo "Subscribed user-deleted queue to topic with message attribute filter policy"
+echo "Subscribed user-events queue to topic with prefix filter policy"
 
 echo "Subscribing debug queue to all events..."
 DEBUG_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
@@ -197,7 +118,7 @@ DEBUG_SUBSCRIPTION_ARN=$(aws --endpoint-url=$ENDPOINT_URL sns subscribe \
   echo "$DEBUG_SUBSCRIPTION_ARN" >&2
   exit 1
 }
-echo "Subscribed debug queue to topic with message attribute filter policy"
+echo "Subscribed debug queue to all events"
 
 echo ""
 echo "Setup complete!"
@@ -207,8 +128,6 @@ echo ""
 echo "AWS_ENDPOINT=$ENDPOINT_URL"
 echo "AWS_REGION=$REGION"
 echo "EVENTS_TOPIC_ARN=$TOPIC_ARN"
-echo "EVENTS_QUEUE_URL_USER_CREATED=$USER_CREATED_QUEUE"
-echo "EVENTS_QUEUE_URL_USER_UPDATED=$USER_UPDATED_QUEUE"
-echo "EVENTS_QUEUE_URL_USER_DELETED=$USER_DELETED_QUEUE"
+echo "EVENTS_QUEUE_URL_USER=$USER_EVENTS_QUEUE"
 echo ""
 echo "Note: Copy .env.local.example to .env.local if you haven't already."
