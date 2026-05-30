@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"go.opentelemetry.io/otel"
 
 	awsUtils "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
 	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/consumer"
@@ -18,24 +20,43 @@ import (
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
-var logger = observability.Logger
+const serviceName = "postgres-template/worker"
 
 func main() {
 	ctx := context.Background()
 
-	logger.Info("Starting worker...")
+	logger := observability.NewBootstrapLogger()
+	ctx = observability.SetLoggerOnContext(ctx, logger)
+
+	logger.InfoContext(ctx, "Starting worker...")
 
 	// Load configuration
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig(logger)
 	if err != nil {
-		logger.Error("Failed to load settings", "error", err)
+		logger.ErrorContext(ctx, "Failed to load settings", "error", err)
 		os.Exit(1)
 	}
+
+	// Set up OpenTelemetry.
+	_, otelShutdown, err := observability.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		logger.ErrorContext(ctx, "Failed to setup OpenTelemetry", "error", err)
+		os.Exit(1)
+	}
+	logger = observability.NewLogger(serviceName)
+	ctx = observability.SetLoggerOnContext(ctx, logger)
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
+
+	tracer := otel.Tracer(serviceName)
+	ctx = observability.SetTracerOnContext(ctx, tracer)
 
 	// Initialize AWS config
 	awsCfg, err := awsUtils.LoadAWSConfig(ctx, cfg)
 	if err != nil {
-		logger.Error("Failed to load AWS config", "error", err)
+		logger.ErrorContext(ctx, "Failed to load AWS config", "error", err)
 		os.Exit(1)
 	}
 
@@ -57,14 +78,10 @@ func main() {
 	router.RegisterHandler(userEventsV1.EventTypeUserDeleted, userDeletedHandler)
 
 	// Create consumer
-	userConsumer := consumer.NewSQSConsumer(sqsClient, consumer.SQSConsumerOptions{
+	userConsumer := consumer.NewSQSConsumer(logger, sqsClient, consumer.SQSConsumerOptions{
 		QueueURL:            cfg.EventsQueueURLUser,
 		MaxNumberOfMessages: aws.Int32(1),
 	})
-
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	// Start consuming messages
 	userConsumer.Start(ctx, router)
@@ -74,5 +91,5 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	logger.Info("Shutting down worker...")
+	logger.InfoContext(ctx, "Shutting down worker...")
 }

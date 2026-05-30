@@ -16,7 +16,7 @@ A Go backend template with a 3-tier architecture, event-driven messaging, and a 
 | Messaging | AWS SNS/SQS via [AWS SDK v2](https://github.com/aws/aws-sdk-go-v2) |
 | Config | [envconfig](https://github.com/kelseyhightower/envconfig) + [godotenv](https://github.com/joho/godotenv) |
 | Migrations | [golang-migrate](https://github.com/golang-migrate/migrate) |
-| Logging | `log/slog` (structured JSON) |
+| Logging | `log/slog` + OpenTelemetry export |
 
 ## Quick Start
 
@@ -31,6 +31,8 @@ make migrate            # Run database migrations
 make run-api            # Start the API server (with live reload)
 ```
 
+The workspace container also starts an Aspire Dashboard at `http://localhost:18888`, with OTLP ingest on `4317` (gRPC) and `4318` (HTTP).
+
 See [DEVELOPMENT.md](DEVELOPMENT.md) for the full development guide.
 
 ## What's Included
@@ -41,6 +43,7 @@ The template ships with a working **User** domain to demonstrate real patterns:
 - Transaction management through `context.Context`
 - Event publishing on create/update/delete (`user.created.v1`, `user.updated.v1`, `user.deleted.v1`)
 - SQS worker that consumes events via an envelope-based router
+- OpenTelemetry support for traces, metrics, and logs with Aspire Dashboard integration
 - Automatic OpenAPI docs at `/docs`
 
 ## Project Structure

@@ -2,15 +2,16 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sns"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 
 	awsUtils "github.com/cgund98/go-postgres-api-template/internal/adapters/aws"
 	"github.com/cgund98/go-postgres-api-template/internal/adapters/events/publisher"
@@ -20,22 +21,44 @@ import (
 	httpuser "github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi/user"
 )
 
-var logger = observability.Logger
+const (
+	serviceName = "postgres-template/http-api"
+)
 
 func main() {
-	ctx := context.Background()
+	// Handle SIGINT (CTRL+C) gracefully.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	logger := observability.NewBootstrapLogger()
+	ctx = observability.SetLoggerOnContext(ctx, logger)
 
 	// Load configuration
-	cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig(logger)
 	if err != nil {
-		logger.Error("Failed to load settings", "error", err)
+		logger.ErrorContext(ctx, "Failed to load settings", "error", err)
 		os.Exit(1)
 	}
+
+	// Set up OpenTelemetry.
+	otelProviders, otelShutdown, err := observability.SetupOTelSDK(ctx, serviceName)
+	if err != nil {
+		logger.ErrorContext(ctx, "Failed to setup OpenTelemetry", "error", err)
+		os.Exit(1)
+	}
+	logger = observability.NewLogger(serviceName)
+	ctx = observability.SetLoggerOnContext(ctx, logger)
+	// Handle shutdown properly so nothing leaks.
+	defer func() {
+		err = errors.Join(err, otelShutdown(context.Background()))
+	}()
+
+	tracer := otel.Tracer(serviceName)
 
 	// Initialize database
 	dbPool, err := pgxpool.New(ctx, cfg.DatabaseURL)
 	if err != nil {
-		logger.Error("Failed to connect to database", "error", err)
+		logger.ErrorContext(ctx, "Failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer dbPool.Close()
@@ -43,7 +66,7 @@ func main() {
 	// Initialize AWS config
 	awsCfg, err := awsUtils.LoadAWSConfig(ctx, cfg)
 	if err != nil {
-		logger.Error("Failed to load AWS config", "error", err)
+		logger.ErrorContext(ctx, "Failed to load AWS config", "error", err)
 		os.Exit(1)
 	}
 
@@ -56,13 +79,13 @@ func main() {
 
 	// Initialize event publisher
 	eventPub := publisher.NewSNSPublisher(cfg.EventsTopicArn, snsClient)
-	logger.Info("event publisher initialized", "topic_arn", cfg.EventsTopicArn)
+	logger.InfoContext(ctx, "event publisher initialized", "topic_arn", cfg.EventsTopicArn)
 
 	// Initialize dependencies
 	deps := httprouter.NewDependencies(dbPool, eventPub)
 
 	// Setup router with Chi and Huma
-	router := httprouter.NewRouter()
+	router := httprouter.NewRouter(serviceName, logger, tracer, otelProviders.MeterProvider)
 
 	// Register API v1 routes
 	userController := httpuser.NewUserController(deps.UserService)
@@ -72,7 +95,7 @@ func main() {
 	router.ChiRouter().Get("/health", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if _, err := w.Write([]byte("OK")); err != nil {
-			logger.Error("Failed to write health check response", "error", err)
+			logger.ErrorContext(ctx, "Failed to write health check response", "error", err)
 		}
 	})
 
@@ -82,28 +105,32 @@ func main() {
 	}
 
 	// Start server in a goroutine
+	srvErr := make(chan error, 1)
 	go func() {
-		logger.Info("Server starting on port", "port", cfg.ServerPort)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Error("Server failed to start", "error", err)
-			os.Exit(1)
-		}
+		logger.InfoContext(ctx, "Server starting on port", "port", cfg.ServerPort)
+		srvErr <- server.ListenAndServe()
 	}()
 
-	// Wait for interrupt signal to gracefully shutdown the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// Wait for interruption.
+	select {
+	case err = <-srvErr:
+		// Error when starting HTTP server.
+		logger.ErrorContext(ctx, "Server failed to start", "error", err)
+		os.Exit(1)
+	case <-ctx.Done():
+		// Wait for first CTRL+C.
+		// Stop receiving signal notifications as soon as possible.
+		stop()
+	}
 
-	logger.Info("Shutting down server...")
-
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	// When Shutdown is called, ListenAndServe immediately returns ErrServerClosed.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Error("Server forced to shutdown", "error", err)
+	err = server.Shutdown(shutdownCtx)
+	if err != nil {
+		logger.ErrorContext(ctx, "Server failed to shutdown", "error", err)
 		os.Exit(1)
 	}
 
-	logger.Info("Server exited")
+	logger.InfoContext(ctx, "Server shut down successfully")
 }

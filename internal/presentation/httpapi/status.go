@@ -4,10 +4,7 @@ import (
 	"errors"
 
 	"github.com/cgund98/go-postgres-api-template/internal/domain"
-	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
-
-var logger = observability.Logger
 
 // GetHTTPStatus converts domain errors to HTTP status codes
 // Uses errors.Is() to handle wrapped errors (e.g., fmt.Errorf("%w: ...", domain.ErrInvalidInput))

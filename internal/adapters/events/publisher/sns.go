@@ -14,8 +14,6 @@ import (
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
-var logger = observability.Logger
-
 // SNSPublisher implements Publisher using AWS SNS
 type SNSPublisher struct {
 	topicARN  string
@@ -37,24 +35,26 @@ func (p *SNSPublisher) Publish(ctx context.Context, args events.PublishArgs) err
 
 // PublishBatch publishes a batch of events to SNS
 func (p *SNSPublisher) PublishBatch(ctx context.Context, args []events.PublishArgs) error {
+	logger := observability.LoggerFromContext(ctx)
+
 	batch, eventTypesList, err := buildSNSBatch(ctx, args)
 	if err != nil {
 		return fmt.Errorf("failed to build SNS batch: %w", err)
 	}
 
-	logger.Info("publishing batch of events to SNS", "topic_arn", p.topicARN, "batch_size", len(batch), "event_types", eventTypesList)
+	logger.InfoContext(ctx, "publishing batch of events to SNS", "topic_arn", p.topicARN, "batch_size", len(batch), "event_types", eventTypesList)
 	response, err := p.snsClient.PublishBatch(ctx, &sns.PublishBatchInput{
 		PublishBatchRequestEntries: batch,
 		TopicArn:                   aws.String(p.topicARN),
 	})
 	if err != nil {
-		logger.Error("failed to publish batch of events to SNS", "error", err)
+		logger.ErrorContext(ctx, "failed to publish batch of events to SNS", "error", err)
 		return err
 	}
 
 	failureCount := 0
 	for _, result := range response.Failed {
-		logger.Error("failed to publish event to SNS", "error", *result.Message, "message_id", *result.Id)
+		logger.ErrorContext(ctx, "failed to publish event to SNS", "error", *result.Message, "message_id", *result.Id)
 		failureCount++
 	}
 	if failureCount > 0 {
