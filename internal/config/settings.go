@@ -1,16 +1,14 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
 
 	"github.com/joho/godotenv"
 	"github.com/kelseyhightower/envconfig"
-
-	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
-
-var logger = observability.Logger
 
 // Config holds the application configuration
 type Config struct {
@@ -33,7 +31,7 @@ type ServerConfig struct {
 }
 
 // LoadConfig loads configuration from file, environment variables, or defaults
-func LoadConfig() (*Config, error) {
+func LoadConfig(logger *slog.Logger) (*Config, error) {
 
 	// Load .env.local file first (if it exists)
 	// Lowest priority - will be overridden by .env and environment variables
@@ -42,7 +40,7 @@ func LoadConfig() (*Config, error) {
 		if err := godotenv.Load(".env.local"); err != nil {
 			return nil, fmt.Errorf("error loading .env.local file: %w", err)
 		}
-		logger.Info("loaded .env.local file")
+		logger.InfoContext(context.Background(), "loaded .env.local file")
 	}
 
 	// Load .env file (if it exists)
@@ -51,10 +49,10 @@ func LoadConfig() (*Config, error) {
 		if err := godotenv.Load(".env"); err != nil {
 			return nil, fmt.Errorf("error loading .env file: %w", err)
 		}
-		logger.Info("loaded .env file")
+		logger.InfoContext(context.Background(), "loaded .env file")
 	}
 
-	logger.Info("loading config", "env", os.Getenv("ENVIRONMENT"))
+	logger.InfoContext(context.Background(), "loading config", "env", os.Getenv("ENVIRONMENT"))
 
 	var config Config
 	if err := envconfig.Process("", &config); err != nil {

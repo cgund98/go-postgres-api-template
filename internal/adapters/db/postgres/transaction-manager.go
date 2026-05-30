@@ -10,8 +10,6 @@ import (
 	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
-var logger = observability.Logger
-
 // TransactionManager implements db.TransactionManager[*DbContext] for PostgreSQL.
 // It stores transactions in context using the txKey defined in context.go.
 // Repositories must use GetDBFromContext() from the same package to retrieve transactions.
@@ -27,6 +25,8 @@ func NewTransactionManager(db *pgxpool.Pool, txOptions pgx.TxOptions) *Transacti
 
 // WithTransaction executes a function within a transaction
 func (m *TransactionManager) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	logger := observability.LoggerFromContext(ctx)
+
 	tx, err := m.db.BeginTx(ctx, m.txOptions)
 	if err != nil {
 		return err
@@ -39,10 +39,10 @@ func (m *TransactionManager) WithTransaction(ctx context.Context, fn func(ctx co
 	// Execute the function
 	if err := fn(txCtx); err != nil {
 		if rollbackErr := tx.Rollback(ctx); rollbackErr != nil {
-			logger.Error("failed to rollback transaction", "error", rollbackErr)
+			logger.ErrorContext(ctx, "failed to rollback transaction", "error", rollbackErr)
 			return rollbackErr
 		}
-		logger.Error("rolled back transaction")
+		logger.InfoContext(ctx, "rolled back transaction")
 		return err
 	}
 

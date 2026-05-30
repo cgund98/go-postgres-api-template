@@ -53,19 +53,19 @@ func (s *Service) CreateUser(ctx context.Context, email, firstName, lastName str
 		}
 		createdUser = user
 
-		publishArgs := events.PublishArgs{
-			Payload:  &v1.UserCreatedEvent{UserID: createdUser.ID, Email: createdUser.Email},
-			Metadata: events.PublishMetadata{Source: "user-service"},
-		}
-		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
-			return fmt.Errorf("failed to publish user created event: %w", err)
-		}
-
 		return nil
 	})
 
 	if err != nil {
 		return User{}, err
+	}
+
+	publishArgs := events.PublishArgs{
+		Payload:  &v1.UserCreatedEvent{UserID: createdUser.ID, Email: createdUser.Email},
+		Metadata: events.PublishMetadata{Source: "user-service"},
+	}
+	if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
+		return User{}, fmt.Errorf("failed to publish user created event: %w", err)
 	}
 
 	return createdUser, nil
@@ -111,19 +111,19 @@ func (s *Service) PatchUser(ctx context.Context, userID string, update *UpdateUs
 		}
 		updatedUser = updated
 
-		publishArgs := events.PublishArgs{
-			Payload:  &v1.UserUpdatedEvent{UserID: updatedUser.ID, Changes: changes},
-			Metadata: events.PublishMetadata{Source: "user-service"},
-		}
-		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
-			return fmt.Errorf("failed to publish user updated event: %w", err)
-		}
-
 		return nil
 	})
 
 	if err != nil {
 		return User{}, err
+	}
+
+	publishArgs := events.PublishArgs{
+		Payload:  &v1.UserUpdatedEvent{UserID: updatedUser.ID, Changes: changes},
+		Metadata: events.PublishMetadata{Source: "user-service"},
+	}
+	if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
+		return User{}, fmt.Errorf("failed to publish user updated event: %w", err)
 	}
 
 	return updatedUser, nil
@@ -155,20 +155,28 @@ func (s *Service) ListUsers(ctx context.Context, limit, offset int) ([]User, int
 
 // DeleteUser deletes a user by ID
 func (s *Service) DeleteUser(ctx context.Context, userID string) error {
-	return s.txManager.WithTransaction(ctx, func(txCtx context.Context) error {
+	var deletedUser User
+	err := s.txManager.WithTransaction(ctx, func(txCtx context.Context) error {
 		user, err := s.validateDeleteUserRequest(txCtx, userID)
 		if err != nil {
 			return fmt.Errorf("failed to validate delete user request: %w", err)
 		}
 
-		publishArgs := events.PublishArgs{
-			Payload:  &v1.UserDeletedEvent{UserID: user.ID},
-			Metadata: events.PublishMetadata{Source: "user-service"},
-		}
-		if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
-			return fmt.Errorf("failed to publish user deleted event: %w", err)
-		}
+		deletedUser = user
 
 		return s.repo.Delete(txCtx, userID)
 	})
+	if err != nil {
+		return err
+	}
+
+	publishArgs := events.PublishArgs{
+		Payload:  &v1.UserDeletedEvent{UserID: deletedUser.ID},
+		Metadata: events.PublishMetadata{Source: "user-service"},
+	}
+	if err := s.eventPublisher.Publish(ctx, publishArgs); err != nil {
+		return fmt.Errorf("failed to publish user deleted event: %w", err)
+	}
+
+	return nil
 }

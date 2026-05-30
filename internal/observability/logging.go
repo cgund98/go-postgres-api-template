@@ -1,9 +1,12 @@
 package observability
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"strings"
+
+	"go.opentelemetry.io/contrib/bridges/otelslog"
 )
 
 const (
@@ -14,6 +17,19 @@ const (
 
 	LogFormatJSON = "JSON"
 )
+
+var loggerCtxKey = &struct{ name string }{"structured_logger"}
+
+func LoggerFromContext(ctx context.Context) *slog.Logger {
+	if logger, ok := ctx.Value(loggerCtxKey).(*slog.Logger); ok {
+		return logger
+	}
+	return nil
+}
+
+func SetLoggerOnContext(ctx context.Context, logger *slog.Logger) context.Context {
+	return context.WithValue(ctx, loggerCtxKey, logger)
+}
 
 func getLevel() slog.Level {
 	levelStr := os.Getenv("LOG_LEVEL")
@@ -46,4 +62,10 @@ func getHandler() slog.Handler {
 	})
 }
 
-var Logger *slog.Logger = slog.New(getHandler())
+func NewBootstrapLogger() *slog.Logger {
+	return slog.New(getHandler())
+}
+
+func NewLogger(serviceName string) *slog.Logger {
+	return otelslog.NewLogger(serviceName, otelslog.WithSource(true))
+}

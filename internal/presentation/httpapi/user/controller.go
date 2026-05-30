@@ -9,6 +9,7 @@ import (
 	"github.com/cgund98/go-postgres-api-template/api/v1/core"
 	apiv1user "github.com/cgund98/go-postgres-api-template/api/v1/user"
 	"github.com/cgund98/go-postgres-api-template/internal/domain/user"
+	"github.com/cgund98/go-postgres-api-template/internal/observability"
 	"github.com/cgund98/go-postgres-api-template/internal/presentation/httpapi"
 )
 
@@ -69,9 +70,12 @@ func (c *Controller) RegisterRoutes(api huma.API) {
 
 // CreateUser handles POST /api/v1/users
 func (c *Controller) CreateUser(ctx context.Context, input *apiv1user.CreateUserInput) (*apiv1user.CreateUserOutput, error) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "CreateUser")
+	defer endSpan()
+
 	u, err := c.service.CreateUser(ctx, input.Body.Email, input.Body.FirstName, input.Body.LastName)
 	if err != nil {
-		return nil, httpapi.NewHumaError(err)
+		return nil, httpapi.NewHumaError(ctx, err)
 	}
 
 	return &apiv1user.CreateUserOutput{
@@ -81,9 +85,12 @@ func (c *Controller) CreateUser(ctx context.Context, input *apiv1user.CreateUser
 
 // GetUser handles GET /api/v1/users/{id}
 func (c *Controller) GetUser(ctx context.Context, input *apiv1user.GetUserInput) (*apiv1user.GetUserOutput, error) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "GetUser")
+	defer endSpan()
+
 	u, err := c.service.GetUser(ctx, input.ID)
 	if err != nil {
-		return nil, httpapi.NewHumaError(err)
+		return nil, httpapi.NewHumaError(ctx, err)
 	}
 
 	return &apiv1user.GetUserOutput{
@@ -93,13 +100,16 @@ func (c *Controller) GetUser(ctx context.Context, input *apiv1user.GetUserInput)
 
 // ListUsers handles GET /api/v1/users
 func (c *Controller) ListUsers(ctx context.Context, input *apiv1user.ListUsersInput) (*apiv1user.ListUsersOutput, error) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "ListUsers")
+	defer endSpan()
+
 	page := input.Page
 	limit := input.Limit
 
 	offset, normalizedLimit := httpapi.NormalizePagination(page, limit)
 	users, total, err := c.service.ListUsers(ctx, normalizedLimit, offset)
 	if err != nil {
-		return nil, httpapi.NewHumaError(err)
+		return nil, httpapi.NewHumaError(ctx, err)
 	}
 
 	var usersResponse []apiv1user.Response
@@ -123,6 +133,9 @@ func (c *Controller) ListUsers(ctx context.Context, input *apiv1user.ListUsersIn
 
 // UpdateUser handles PATCH /api/v1/users/{id}
 func (c *Controller) UpdateUser(ctx context.Context, input *apiv1user.UpdateUserInput) (*apiv1user.UpdateUserOutput, error) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "UpdateUser")
+	defer endSpan()
+
 	update := &user.UpdateUserCommand{
 		Email:     input.Body.Email,
 		FirstName: input.Body.FirstName,
@@ -131,7 +144,7 @@ func (c *Controller) UpdateUser(ctx context.Context, input *apiv1user.UpdateUser
 
 	u, err := c.service.PatchUser(ctx, input.ID, update)
 	if err != nil {
-		return nil, httpapi.NewHumaError(err)
+		return nil, httpapi.NewHumaError(ctx, err)
 	}
 
 	return &apiv1user.UpdateUserOutput{
@@ -141,9 +154,12 @@ func (c *Controller) UpdateUser(ctx context.Context, input *apiv1user.UpdateUser
 
 // DeleteUser handles DELETE /api/v1/users/{id}
 func (c *Controller) DeleteUser(ctx context.Context, input *apiv1user.DeleteUserInput) (*apiv1user.DeleteUserOutput, error) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "DeleteUser")
+	defer endSpan()
+
 	err := c.service.DeleteUser(ctx, input.ID)
 	if err != nil {
-		return nil, httpapi.NewHumaError(err)
+		return nil, httpapi.NewHumaError(ctx, err)
 	}
 
 	return &apiv1user.DeleteUserOutput{}, nil

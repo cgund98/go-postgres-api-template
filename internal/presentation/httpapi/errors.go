@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/cgund98/go-postgres-api-template/internal/domain"
+	"github.com/cgund98/go-postgres-api-template/internal/observability"
 )
 
 // ErrorResponse represents an error response
@@ -16,7 +18,7 @@ type ErrorResponse struct {
 
 // SanitizeError returns a safe error message for clients
 // Domain errors are safe to expose, but internal errors are sanitized
-func SanitizeError(err error) string {
+func SanitizeError(ctx context.Context, err error) string {
 	// Check if it's a known domain error - these are safe to expose
 	if errors.Is(err, domain.ErrNotFound) {
 		return err.Error()
@@ -29,11 +31,12 @@ func SanitizeError(err error) string {
 	}
 
 	// For internal errors, log the full error but return a generic message
-	logger.Error("internal server error occurred", "error", err)
+	logger := observability.LoggerFromContext(ctx)
+	logger.ErrorContext(ctx, "internal server error occurred", "error", err)
 	return "An internal error occurred"
 }
 
 // NewHumaError creates a new Huma error with the appropriate HTTP status code and sanitized error message
-func NewHumaError(err error) huma.StatusError {
-	return huma.NewError(GetHTTPStatus(err), SanitizeError(err))
+func NewHumaError(ctx context.Context, err error) huma.StatusError {
+	return huma.NewError(GetHTTPStatus(err), SanitizeError(ctx, err))
 }

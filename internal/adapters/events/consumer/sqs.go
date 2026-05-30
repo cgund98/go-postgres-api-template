@@ -41,7 +41,7 @@ type SQSConsumer struct {
 }
 
 // NewSQSConsumer creates a new SQS consumer
-func NewSQSConsumer(sqsClient mockaws.SQSClientInterface, options SQSConsumerOptions) *SQSConsumer {
+func NewSQSConsumer(rootLogger *slog.Logger, sqsClient mockaws.SQSClientInterface, options SQSConsumerOptions) *SQSConsumer {
 	var maxNumberOfMessages int32 = defaultMaxNumberOfMessages
 	var visibilityTimeout int32 = defaultVisibilityTimeout
 	var waitTimeSeconds int32 = defaultWaitTimeSeconds
@@ -58,7 +58,7 @@ func NewSQSConsumer(sqsClient mockaws.SQSClientInterface, options SQSConsumerOpt
 		waitTimeSeconds = *options.WaitTimeSeconds
 	}
 
-	logger := observability.Logger.With("queueURL", options.QueueURL)
+	logger := rootLogger.With("queue_url", options.QueueURL)
 
 	return &SQSConsumer{
 		queueURL:            options.QueueURL,
@@ -72,6 +72,9 @@ func NewSQSConsumer(sqsClient mockaws.SQSClientInterface, options SQSConsumerOpt
 
 // Ack deletes a message from SQS
 func (c *SQSConsumer) Ack(ctx context.Context, messageID string) error {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "Ack")
+	defer endSpan()
+
 	_, err := c.sqsClient.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.queueURL),
 		ReceiptHandle: aws.String(messageID),
@@ -85,6 +88,9 @@ func (c *SQSConsumer) Ack(ctx context.Context, messageID string) error {
 
 // BatchAck deletes a batch of messages from SQS
 func (c *SQSConsumer) BatchAck(ctx context.Context, messageIDs []string) error {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "BatchAck")
+	defer endSpan()
+
 	entries := make([]sqstypes.DeleteMessageBatchRequestEntry, len(messageIDs))
 	for i, messageID := range messageIDs {
 		entries[i] = sqstypes.DeleteMessageBatchRequestEntry{
@@ -108,6 +114,9 @@ func (c *SQSConsumer) BatchAck(ctx context.Context, messageIDs []string) error {
 // processBatchOfSingleMessages retrieves a batch of sqs messages from SQS
 // and processes them one by one
 func (c *SQSConsumer) processBatchOfSingleMessages(ctx context.Context, router *events.Router) {
+	ctx, endSpan := observability.StartTraceFromContext(ctx, "processBatchOfSingleMessages")
+	defer endSpan()
+
 	message, err := c.sqsClient.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
 		QueueUrl:            aws.String(c.queueURL),
 		MaxNumberOfMessages: c.maxNumberOfMessages,
@@ -115,7 +124,7 @@ func (c *SQSConsumer) processBatchOfSingleMessages(ctx context.Context, router *
 		WaitTimeSeconds:     c.waitTimeSeconds,
 	})
 	if err != nil {
-		c.logger.Error("failed to receive sqs messages", "error", err)
+		c.logger.ErrorContext(ctx, "failed to receive sqs messages", "error", err)
 		time.Sleep(errorBackoff)
 		return
 	}
@@ -127,25 +136,31 @@ func (c *SQSConsumer) processBatchOfSingleMessages(ctx context.Context, router *
 	for _, message := range message.Messages {
 		var envelope registry.Envelope
 		if message.Body == nil {
-			c.logger.Error("message body is nil")
+			c.logger.ErrorContext(ctx, "message body is nil")
 			return
 		}
 
 		err := envelope.Unmarshal([]byte(*message.Body))
 		if err != nil {
-			c.logger.Error("failed to unmarshal envelope", "error", err)
+			c.logger.ErrorContext(ctx, "failed to unmarshal envelope", "error", err)
 			return
 		}
 
-		err = router.Route(ctx, envelope)
+		msgLogger := c.logger
+		if message.MessageId != nil {
+			msgLogger = msgLogger.With("message_id", *message.MessageId)
+		}
+		msgCtx := observability.SetLoggerOnContext(ctx, msgLogger)
+
+		err = router.Route(msgCtx, envelope)
 		if err != nil {
-			c.logger.Error("failed to route event", "error", err)
+			c.logger.ErrorContext(msgCtx, "failed to route event", "error", err)
 			return
 		}
 
-		err = c.Ack(ctx, *message.ReceiptHandle)
+		err = c.Ack(msgCtx, *message.ReceiptHandle)
 		if err != nil {
-			c.logger.Error("failed to ack sqs message", "error", err)
+			c.logger.ErrorContext(msgCtx, "failed to ack sqs message", "error", err)
 			return
 		}
 	}
@@ -154,11 +169,11 @@ func (c *SQSConsumer) processBatchOfSingleMessages(ctx context.Context, router *
 // Start starts consuming messages from SQS. This will begin in a new goroutine and return immediately.
 func (c *SQSConsumer) Start(ctx context.Context, router *events.Router) {
 	go func() {
-		c.logger.Info("starting sqs consumer")
+		c.logger.InfoContext(ctx, "starting sqs consumer")
 		for {
 			select {
 			case <-ctx.Done():
-				c.logger.Info("sqs consumer context canceled, stopping")
+				c.logger.InfoContext(ctx, "sqs consumer context canceled, stopping")
 				return
 			default:
 				c.processBatchOfSingleMessages(ctx, router)
